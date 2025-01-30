@@ -1,0 +1,15 @@
+[package]
+name = "jets"
+version = "0.1.0"
+edition = "2021"
+description = "A Rust rule-based tunnel"
+homepage = "https://github.com/zhangsan946/jets"
+repository = "https://github.com/zhangsan946/jets"
+documentation = "https://docs.rs/jets"
+authors = ["San Zhang <sanzhang@mail.com>"]
+license = "Apache-2.0"
+readme = "README.md"
+
+exclude = ["src/bin/**"]
+
+[dependencies]
