@@ -13,3 +13,25 @@ readme = "README.md"
 exclude = ["src/bin/**"]
 
 [dependencies]
+actix-rt = "2.10"
+actix-server = "2.5"
+actix-service = "2.0"
+anyhow = "1.0"
+async-trait = "0.1"
+bytes = "1"
+env_logger = "0.11"
+futures = "0.3"
+log = "0.4"
+once_cell = "1.20"
+prost = "0.13.4"
+rand = "0.9.0"
+rustls = "0.23.23"
+rustls-pki-types = "1.11.0"
+shadowsocks = {version = "1.22.0", features = ["aead-cipher-2022", "security-replay-attack-detect"]}
+shadowsocks-crypto = "0.5.8"
+tokio = {version = "1", features = ["net", "io-util", "macros", "sync"]}
+uuid = {version = "1.13.1", features = ["v5"]}
+webpki-roots = "0.26.8"
+
+[build-dependencies]
+prost-build = "0.13.4"
