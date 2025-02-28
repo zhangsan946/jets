@@ -2,13 +2,12 @@ pub mod socks5;
 
 use crate::common::{new_io_error, Address};
 use crate::proxy::{Inbound, ProxySteam};
-use anyhow::{Context, Result};
 use async_trait::async_trait;
 use socks5::Socks5Inbound;
 pub use socks5::Socks5Outbound;
 use std::collections::HashMap;
+use std::io::{Error, ErrorKind, Result};
 use std::net::SocketAddr;
-use std::str::FromStr;
 use tokio::net::TcpStream;
 
 #[derive(Clone, Debug)]
@@ -18,11 +17,9 @@ pub struct SocksInbound {
 }
 
 impl SocksInbound {
-    pub fn new(addr: &str, accounts: Vec<(String, String)>) -> Result<Self> {
-        let addr =
-            Address::from_str(addr).context(format!("Invalid socks inbound address: {addr}"))?;
+    pub fn new(addr: Address, accounts: Vec<(String, String)>) -> Self {
         let accounts: HashMap<_, _> = accounts.into_iter().collect();
-        Ok(Self { addr, accounts })
+        Self { addr, accounts }
     }
 }
 
@@ -40,15 +37,15 @@ impl Inbound for SocksInbound {
         &self,
         stream: Box<dyn ProxySteam>,
         peer_addr: &SocketAddr,
-    ) -> std::io::Result<(Box<dyn ProxySteam>, Address)> {
-        let io = stream
+    ) -> Result<(Box<dyn ProxySteam>, Address)> {
+        let conn = stream
             .as_any()
             .downcast_ref::<TcpStream>()
             .ok_or_else(|| new_io_error("Invalid tcp stream"))?;
         let mut version_buffer = [0u8; 1];
-        let n = io.peek(&mut version_buffer).await?;
+        let n = conn.peek(&mut version_buffer).await?;
         if n == 0 {
-            return Err(std::io::Error::from(std::io::ErrorKind::UnexpectedEof));
+            return Err(Error::from(ErrorKind::UnexpectedEof));
         }
 
         match version_buffer[0] {

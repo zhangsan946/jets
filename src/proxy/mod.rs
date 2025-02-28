@@ -1,3 +1,4 @@
+pub mod blackhole;
 pub mod freedom;
 pub mod shadowsocks;
 pub mod socks;

@@ -1,7 +1,6 @@
 use super::super::{Inbound, Outbound, ProxySteam};
 use super::SocksInbound;
 use crate::common::{new_io_error, Address};
-use anyhow::{Context, Result};
 use async_trait::async_trait;
 use shadowsocks::relay::socks5::{
     self, Command, HandshakeRequest, HandshakeResponse, PasswdAuthRequest, PasswdAuthResponse,
@@ -9,7 +8,6 @@ use shadowsocks::relay::socks5::{
 };
 use std::collections::HashMap;
 use std::net::{SocketAddr, ToSocketAddrs};
-use std::str::FromStr;
 use tokio::net::TcpStream;
 
 #[derive(Clone, Debug)]
@@ -19,11 +17,9 @@ pub struct Socks5Inbound {
 }
 
 impl Socks5Inbound {
-    pub fn new(addr: &str, accounts: Vec<(String, String)>) -> Result<Self> {
-        let addr =
-            Address::from_str(addr).context(format!("Invalid socks5 inbound address: {addr}"))?;
+    pub fn new(addr: Address, accounts: Vec<(String, String)>) -> Self {
         let accounts: HashMap<_, _> = accounts.into_iter().collect();
-        Ok(Self { addr, accounts })
+        Self { addr, accounts }
     }
 }
 
@@ -134,11 +130,9 @@ pub struct Socks5Outbound {
 }
 
 impl Socks5Outbound {
-    pub fn new(addr: &str, accounts: Vec<(String, String)>) -> Result<Self> {
-        let addr =
-            Address::from_str(addr).context(format!("Invalid socks5 outbound address: {addr}"))?;
+    pub fn new(addr: Address, accounts: Vec<(String, String)>) -> Self {
         let accounts: HashMap<_, _> = accounts.into_iter().collect();
-        Ok(Self { addr, accounts })
+        Self { addr, accounts }
     }
 }
 #[async_trait]

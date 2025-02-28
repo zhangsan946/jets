@@ -508,12 +508,13 @@ mod test {
     use super::Tls13CipherSuite;
     #[test]
     fn test_tls13_cipher_suite_init() {
-        let value: u16 = 0x1303;
-        let cipher_suite = Tls13CipherSuite::try_from(value);
         assert_eq!(
-            cipher_suite,
-            Ok(Tls13CipherSuite::TlsChacha20Poly1305Sha256)
+            Tls13CipherSuite::from(0x1303),
+            Tls13CipherSuite::TlsChacha20Poly1305Sha256,
         );
-        assert_eq!(true, Tls13CipherSuite::try_from(0x11).is_err());
+        assert_eq!(
+            true,
+            matches!(Tls13CipherSuite::from(0x11), Tls13CipherSuite::Unknown(_)),
+        );
     }
 }

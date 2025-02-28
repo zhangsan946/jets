@@ -1,4 +1,6 @@
 use once_cell::sync::Lazy;
+use serde::de::{value, Deserialize, IntoDeserializer};
+use serde::ser::Serialize;
 use shadowsocks::config::ServerType;
 use shadowsocks::context::{Context, SharedContext};
 pub use shadowsocks::net::{ConnectOpts, TcpStream};
@@ -17,6 +19,17 @@ pub fn new_io_error<T: ToString>(message: T) -> io::Error {
         io::ErrorKind::Other,
         format!("Error: {}", message.to_string()),
     )
+}
+
+pub fn from_str<'a, T: Deserialize<'a>>(s: &'a str) -> io::Result<T> {
+    // https://docs.rs/serde/latest/serde/de/value/index.html
+    let result = T::deserialize(s.into_deserializer())
+        .map_err(|_: value::Error| io::Error::new(io::ErrorKind::InvalidInput, s))?;
+    Ok(result)
+}
+
+pub fn to_string<T: ?Sized + Serialize + std::fmt::Display>(value: &T) -> String {
+    value.to_string()
 }
 
 // find substr in bytes
@@ -50,6 +63,17 @@ macro_rules! impl_asyncwrite_flush_shutdown {
             ctx: &mut Context<'_>,
         ) -> Poll<std::io::Result<()>> {
             AsyncWrite::poll_shutdown(Pin::new(&mut self.$stream), ctx)
+        }
+    };
+}
+
+#[macro_export]
+macro_rules! impl_display {
+    ($type:tt) => {
+        impl std::fmt::Display for $type {
+            fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+                self.serialize(f)
+            }
         }
     };
 }

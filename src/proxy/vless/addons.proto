@@ -2,6 +2,7 @@ syntax = "proto3";
 
 package xray.proxy.vless.encoding;
 
+// https://github.com/XTLS/Xray-core/blob/06b4a7ce4d2ce309a00e59cf842bad590c498c04/proxy/vless/encoding/addons.proto#L9
 message Addons {
   string Flow = 1;
   bytes Seed = 2;

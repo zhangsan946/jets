@@ -1,19 +1,46 @@
+use jets::app::config::{InboundConfig, OutboundConfig, VlessFlow};
 use jets::app::{App, Config};
 
 fn main() -> std::io::Result<()> {
     env_logger::init_from_env(env_logger::Env::new().default_filter_or("jets=debug,info"));
-    let config = Config::default()
-        .add_socks_inbound("127.0.0.1:1080", vec![])
-        .add_freedom_outbound("freedom")
-        .add_socks5_outbound("socks5", "127.0.0.1:18000", vec![])
-        .add_shadowsocks_outbound(
-            "shadowsocks",
-            "127.0.0.1:18000",
-            "base64pass1:base64pass2",
-            "2022-blake3-aes-256-gcm",
-        )
-        .add_vless_outbound("default", "127.0.0.1:18000", "pass", "");
+    // std::env::set_var("RUST_BACKTRACE", "full");
 
-    let app = App::new(config);
+    // // export tls key material for wireshark analysis
+    // std::env::set_var("SSLKEYLOGFILE", "d:\\sslkey.log");
+
+    std::env::set_var(
+        "DAT_DIR",
+        "C:\\Users\\zhangsan946\\AppData\\Local\\Spaceship\\resources",
+    );
+
+    // let path = "C:\\Users\\zhangsan946\\AppData\\Roaming\\Spaceship\\spaceship.json";
+    // let config = Config::load(path)?;
+    // println!("json config: {:?}", config);
+
+    let mut config = Config::default();
+    config
+        .inbounds
+        .push(InboundConfig::new_socks("127.0.0.1", 1080));
+
+    // config.outbounds.push(OutboundConfig::new_socks("127.0.0.1", 18000));
+    // config.outbounds.push(OutboundConfig::new_shadowsocks("127.0.0.1", 1234, method, "password"));
+    config.outbounds.push(OutboundConfig::new_vless(
+        "server",
+        1234,
+        "uuid",
+        VlessFlow::XtlsRprxVision,
+    ));
+    config
+        .outbounds
+        .push(OutboundConfig::new_freedom(Some("direct".to_string())));
+    config
+        .outbounds
+        .push(OutboundConfig::new_blackhole(Some("block".to_string())));
+
+    let mut routing_rule = RoutingRule::new("direct".to_string());
+    routing_rule.domain.push("domain:baidu.com".to_string());
+    config.routing.rules.push(routing_rule);
+
+    let app = App::new(config)?;
     app.run()
 }

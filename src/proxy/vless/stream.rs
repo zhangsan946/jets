@@ -2,7 +2,7 @@ use super::super::{address_type, request_command, ProxySteam};
 use super::addons::Addons;
 use super::xtls::{TrafficState, VisionReader, VisionWriter};
 use super::VlessFlow;
-use crate::common::{new_io_error, Address};
+use crate::common::{from_str, new_io_error, to_string, Address};
 use crate::impl_asyncwrite_flush_shutdown;
 use bytes::{BufMut, BytesMut};
 use futures::ready;
@@ -10,7 +10,6 @@ use prost::Message;
 use std::io;
 use std::net::SocketAddr;
 use std::pin::Pin;
-use std::str::FromStr;
 use std::task::{Context, Poll};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, ReadBuf};
 use uuid::Uuid;
@@ -39,7 +38,7 @@ impl VlessHeaderRequest {
         let addons = match flow {
             VlessFlow::None => None,
             _ => Some(Addons {
-                flow: flow.to_string(),
+                flow: to_string(&flow),
                 ..Default::default()
             }),
         };
@@ -140,7 +139,7 @@ impl VlessHeaderResponse {
                 let mut buf = vec![0u8; len as usize];
                 let _ = r.read_exact(&mut buf).await?;
                 let addon = Addons::decode(buf.as_slice())?;
-                VlessFlow::from_str(&addon.flow).map_err(new_io_error)?
+                from_str(&addon.flow)?
             }
         };
         Ok(Self { ver, flow })
@@ -229,9 +228,9 @@ where
                 VlessStreamReadState::DecodeHeaderFlow(ref mut buffer) => {
                     ready!(this.stream.poll_read_exact(cx, buffer))?;
                     let addon = Addons::decode(buffer.as_ref())?;
-                    let flow = VlessFlow::from_str(&addon.flow).map_err(new_io_error)?;
+                    let flow: VlessFlow = from_str(&addon.flow)?;
 
-                    log::debug!("{} Received flow: {}", this.stream_id, flow);
+                    log::debug!("{} Received flow: {:?}", this.stream_id, flow);
                     // It seems that it won't response the same vless flow in request
                     // if this.flow != flow {
                     //     log::error!("Invalid VLESS flow {} received", flow);
