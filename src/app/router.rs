@@ -373,21 +373,21 @@ impl TryFrom<Cidr> for IpRange {
                     format!("Expect 4 bytes, got {}", e.len()),
                 )
             })?;
-            if value.prefix >= 32 {
+            if value.prefix > 32 {
                 return Err(Error::new(
                     ErrorKind::InvalidData,
                     format!("Invalid prefix of {} for ipv4 address", value.prefix),
                 ));
             }
             IpAddr::from(ip)
-        } else if value.ip.len() == 4 {
+        } else if value.ip.len() == 16 {
             let ip: [u8; 16] = value.ip.try_into().map_err(|e: Vec<u8>| {
                 Error::new(
                     ErrorKind::InvalidData,
                     format!("Expect 16 bytes, got {}", e.len()),
                 )
             })?;
-            if value.prefix >= 128 {
+            if value.prefix > 128 {
                 return Err(Error::new(
                     ErrorKind::InvalidData,
                     format!("Invalid prefix of {} for ipv6 address", value.prefix),
