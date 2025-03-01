@@ -38,7 +38,10 @@ impl VlessOutbound {
 #[async_trait]
 impl Outbound for VlessOutbound {
     async fn handle(&self, addr: &Address) -> std::io::Result<Box<dyn ProxySteam>> {
-        let mut stream = self.tls.connect(&self.addr, &self.connect_opts).await?;
+        let mut stream = self
+            .tls
+            .connect(&self.addr, &self.connect_opts, self.flow != VlessFlow::None)
+            .await?;
 
         let stream_id = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)

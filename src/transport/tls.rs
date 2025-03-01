@@ -35,7 +35,12 @@ impl Default for Tls {
 }
 
 impl Tls {
-    pub async fn connect(&self, addr: &Address, connect_opts: &ConnectOpts) -> Result<TlsStream> {
+    pub async fn connect(
+        &self,
+        addr: &Address,
+        connect_opts: &ConnectOpts,
+        xtls: bool,
+    ) -> Result<TlsStream> {
         let conn =
             TcpStream::connect_remote_with_opts(&DEFAULT_CONTEXT, addr, connect_opts).await?;
         let dnsname = if let Some(server_name) = &self.server_name {
@@ -45,7 +50,7 @@ impl Tls {
         };
         let session = ClientConnection::new(Arc::new(self.tls_config.to_owned()), dnsname)
             .map_err(new_io_error)?;
-        let mut tls_stream = TlsStream::new(conn, session);
+        let mut tls_stream = TlsStream::new(conn, session, xtls);
         poll_fn(|cx| tls_stream.handshake(cx)).await?;
         Ok(tls_stream)
     }
@@ -65,6 +70,7 @@ pub struct TlsStream {
     conn: TcpStream,
     session: ClientConnection,
     read_state: ReadState,
+    xtls: bool,
 }
 
 impl AsRawTcp for TlsStream {
@@ -74,23 +80,20 @@ impl AsRawTcp for TlsStream {
 }
 
 impl TlsStream {
-    pub fn new(conn: TcpStream, session: ClientConnection) -> Self {
+    pub fn new(conn: TcpStream, session: ClientConnection, xtls: bool) -> Self {
         Self {
             conn,
             session,
             read_state: ReadState::ReadHead([0u8; 5], 0),
+            xtls,
         }
     }
 
-    pub fn get_mut(&mut self) -> (&mut TcpStream, &mut ClientConnection) {
-        (&mut self.conn, &mut self.session)
-    }
-
     pub fn conn_read(&mut self, cx: &mut Context) -> Poll<Result<usize>> {
-        let mut reader = SyncReadAdapter {
+        let mut reader = SyncAdapter {
             io: &mut self.conn,
             cx,
-            is_handshaking: self.session.is_handshaking(),
+            xtls_mode: self.xtls && !self.session.is_handshaking(),
             read_state: &mut self.read_state,
         };
 
@@ -123,9 +126,11 @@ impl TlsStream {
     }
 
     pub fn conn_write(&mut self, cx: &mut Context) -> Poll<Result<usize>> {
-        let mut writer = SyncWriteAdapter {
+        let mut writer = SyncAdapter {
             io: &mut self.conn,
             cx,
+            xtls_mode: false,
+            read_state: &mut self.read_state,
         };
 
         match self.session.write_tls(&mut writer) {
@@ -135,23 +140,17 @@ impl TlsStream {
     }
 
     fn handshake(&mut self, cx: &mut Context<'_>) -> Poll<Result<()>> {
-        loop {
-            if !self.session.is_handshaking() {
-                while self.session.wants_write() {
-                    ready!(self.conn_write(cx))?;
-                }
-                log::debug!("Tls handshake done");
-                return Poll::Ready(Ok(()));
-            }
+        let mut io = SyncAdapter {
+            io: &mut self.conn,
+            cx,
+            xtls_mode: false,
+            read_state: &mut self.read_state,
+        };
 
-            while self.session.wants_write() {
-                ready!(self.conn_write(cx))?;
-            }
-            ready!(Pin::new(&mut self.conn).poll_flush(cx))?;
-
-            if self.session.wants_read() {
-                ready!(self.conn_read(cx))?;
-            }
+        match self.session.complete_io(&mut io) {
+            Err(ref err) if err.kind() == ErrorKind::WouldBlock => Poll::Pending,
+            Err(err) => Poll::Ready(Err(err)),
+            Ok(_) => Poll::Ready(Ok(())),
         }
     }
 }
@@ -216,19 +215,19 @@ impl AsyncWrite for TlsStream {
     }
 }
 
-struct SyncReadAdapter<'a, 'b, T> {
+struct SyncAdapter<'a, 'b, T> {
     pub io: &'a mut T,
     pub cx: &'a mut Context<'b>,
-    pub is_handshaking: bool,
+    pub xtls_mode: bool,
     pub read_state: &'a mut ReadState,
 }
 
-impl<T: AsyncRead + Unpin> Read for SyncReadAdapter<'_, '_, T> {
+impl<T: AsyncRead + Unpin> Read for SyncAdapter<'_, '_, T> {
     #[inline]
     fn read(&mut self, buf: &mut [u8]) -> Result<usize> {
         let mut buffer = ReadBuf::new(buf);
 
-        if self.is_handshaking {
+        if !self.xtls_mode {
             let result = match Pin::new(&mut self.io).poll_read(self.cx, &mut buffer) {
                 Poll::Ready(Ok(())) => Ok(buffer.filled().len()),
                 Poll::Ready(Err(err)) => Err(err),
@@ -302,12 +301,7 @@ impl<T: AsyncRead + Unpin> Read for SyncReadAdapter<'_, '_, T> {
     }
 }
 
-struct SyncWriteAdapter<'a, 'b, T> {
-    pub io: &'a mut T,
-    pub cx: &'a mut Context<'b>,
-}
-
-impl<T: Unpin> SyncWriteAdapter<'_, '_, T> {
+impl<T: Unpin> SyncAdapter<'_, '_, T> {
     #[inline]
     fn poll_with<U>(
         &mut self,
@@ -320,7 +314,7 @@ impl<T: Unpin> SyncWriteAdapter<'_, '_, T> {
     }
 }
 
-impl<T: AsyncWrite + Unpin> Write for SyncWriteAdapter<'_, '_, T> {
+impl<T: AsyncWrite + Unpin> Write for SyncAdapter<'_, '_, T> {
     #[inline]
     fn write(&mut self, buf: &[u8]) -> Result<usize> {
         self.poll_with(|io, cx| io.poll_write(cx, buf))

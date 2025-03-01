@@ -1,4 +1,4 @@
-use jets::app::config::{InboundConfig, OutboundConfig, VlessFlow};
+use jets::app::config::{InboundConfig, OutboundConfig, RoutingRule, VlessFlow};
 use jets::app::{App, Config};
 
 fn main() -> std::io::Result<()> {
@@ -38,7 +38,8 @@ fn main() -> std::io::Result<()> {
         .push(OutboundConfig::new_blackhole(Some("block".to_string())));
 
     let mut routing_rule = RoutingRule::new("direct".to_string());
-    routing_rule.domain.push("domain:baidu.com".to_string());
+    routing_rule.domain.append(&mut ["geosite:cn".to_string()].to_vec());
+    routing_rule.ip.append(&mut ["geoip:cn".to_string(), "geoip:private".to_string()].to_vec());
     config.routing.rules.push(routing_rule);
 
     let app = App::new(config)?;
