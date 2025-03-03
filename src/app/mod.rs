@@ -4,7 +4,7 @@ pub mod dat {
 }
 pub mod router;
 
-use crate::common::copy_bidirectional;
+use crate::common::{copy_bidirectional, Address};
 use crate::proxy::{Inbound, Outbound, ProxySteam};
 use actix_server::Server;
 use actix_service::fn_service;
@@ -93,32 +93,8 @@ impl App {
                             let peer_addr = stream.peer_addr()?;
                             let local_addr = stream.local_addr()?;
                             log::debug!("{} -> {}", peer_addr, local_addr);
-                            let stream: Box<dyn ProxySteam> = Box::new(stream);
-                            match inbound.handle(stream, &peer_addr).await {
-                                Ok((mut stream, address)) => {
-                                    let outbound_tag = router.pick(&address, &inbound_tag);
-                                    let outbound =
-                                        outbounds.get(&outbound_tag).unwrap_or_else(|| {
-                                            log::warn!(
-                                                "Routing to outbound with tag {} not found",
-                                                outbound_tag
-                                            );
-                                            log::warn!("Using default outbound");
-                                            outbounds
-                                                .get(DEFAULT_OUTBOUND_TAG)
-                                                .expect("default outbound")
-                                        });
-                                    let mut down_stream =
-                                        outbound.handle(&address).await.map_err(|e| {
-                                            log::error!(
-                                                "Connection to {} failed: {:#}",
-                                                address,
-                                                e
-                                            );
-                                            e
-                                        })?;
-                                    return copy_bidirectional(&mut stream, &mut down_stream).await;
-                                }
+                            match inbound.handle(stream, inbound_tag, outbounds, router).await {
+                                Ok(_) => Ok(()),
                                 Err(e) => {
                                     log::error!("Inbound {} failed: {:#}", inbound.addr(), e);
                                     Err(e)
@@ -134,10 +110,34 @@ impl App {
     }
 }
 
-use crate::common::Address;
+pub(crate) async fn establish_tcp_tunnel(
+    mut stream: Box<dyn ProxySteam>,
+    address: Address,
+    inbound_tag: Option<String>,
+    outbounds: Arc<HashMap<String, Arc<Box<dyn Outbound>>>>,
+    router: Arc<Router>,
+) -> Result<()> {
+    let outbound_tag = router.pick(&address, &inbound_tag);
+    let outbound = outbounds.get(&outbound_tag).unwrap_or_else(|| {
+        log::warn!("Routing to outbound with tag {} not found", outbound_tag);
+        log::warn!("Using default outbound");
+        outbounds
+            .get(DEFAULT_OUTBOUND_TAG)
+            .expect("default outbound")
+    });
+    let mut down_stream = outbound.handle(&address).await.map_err(|e| {
+        log::error!("Connection to {} failed: {:#}", address, e);
+        e
+    })?;
+    return copy_bidirectional(&mut stream, &mut down_stream)
+        .await
+        .map(|_| ());
+}
+
 use crate::proxy::{
     blackhole::BlackholeOutbound,
     freedom::FreedomOutbound,
+    http::HttpInbound,
     shadowsocks::ShadowsocksOutbound,
     socks::{Socks5Outbound, SocksInbound},
     vless::VlessOutbound,
@@ -148,7 +148,13 @@ use config::{
 use std::str::FromStr;
 fn parse_inbound(inbound: &InboundConfig) -> Result<Box<dyn Inbound>> {
     match inbound.protocol {
-        InboundProtocolOption::Http => todo!("http inbound"),
+        InboundProtocolOption::Http => {
+            let addr = format!("{}:{}", inbound.listen, inbound.port);
+            let addr =
+                Address::from_str(&addr).map_err(|_| Error::new(ErrorKind::InvalidInput, addr))?;
+            let http_inbound = HttpInbound::new(addr, vec![]);
+            Ok(Box::new(http_inbound) as Box<dyn Inbound>)
+        }
         InboundProtocolOption::Socks => {
             let addr = format!("{}:{}", inbound.listen, inbound.port);
             let addr =

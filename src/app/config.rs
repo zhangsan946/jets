@@ -166,6 +166,10 @@ impl InboundConfig {
     pub fn new_socks<S: Into<String>>(listen: S, port: u16) -> Self {
         Self::new(listen, port, InboundProtocolOption::Socks)
     }
+
+    pub fn new_http<S: Into<String>>(listen: S, port: u16) -> Self {
+        Self::new(listen, port, InboundProtocolOption::Http)
+    }
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]

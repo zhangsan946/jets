@@ -1,5 +1,7 @@
 use super::super::{Inbound, Outbound, ProxySteam};
 use super::SocksInbound;
+use crate::app::establish_tcp_tunnel;
+use crate::app::router::Router;
 use crate::common::{new_io_error, Address};
 use async_trait::async_trait;
 use shadowsocks::relay::socks5::{
@@ -7,7 +9,9 @@ use shadowsocks::relay::socks5::{
     Reply, TcpRequestHeader, TcpResponseHeader,
 };
 use std::collections::HashMap;
-use std::net::{SocketAddr, ToSocketAddrs};
+use std::io::Result;
+use std::net::ToSocketAddrs;
+use std::sync::Arc;
 use tokio::net::TcpStream;
 
 #[derive(Clone, Debug)]
@@ -44,9 +48,11 @@ impl Inbound for Socks5Inbound {
 
     async fn handle(
         &self,
-        mut stream: Box<dyn ProxySteam>,
-        peer_addr: &SocketAddr,
-    ) -> std::io::Result<(Box<dyn ProxySteam>, Address)> {
+        mut stream: TcpStream,
+        inbound_tag: Option<String>,
+        outbounds: Arc<HashMap<String, Arc<Box<dyn Outbound>>>>,
+        router: Arc<Router>,
+    ) -> Result<()> {
         // 1. Handshake
         let request = match HandshakeRequest::read_from(&mut stream).await {
             Ok(r) => r,
@@ -95,7 +101,7 @@ impl Inbound for Socks5Inbound {
             Err(err) => {
                 let response = TcpResponseHeader::new(
                     err.as_reply(),
-                    Address::SocketAddress(peer_addr.to_owned()),
+                    Address::SocketAddress(stream.peer_addr()?.to_owned()),
                 );
                 response.write_to(&mut stream).await?;
                 return Err(err.into());
@@ -118,8 +124,8 @@ impl Inbound for Socks5Inbound {
                 return Err(new_io_error("Socks5 tcp bind is not supported"));
             }
         }
-
-        Ok((stream, address))
+        let stream: Box<dyn ProxySteam> = Box::new(stream);
+        establish_tcp_tunnel(stream, address, inbound_tag, outbounds, router).await
     }
 }
 
@@ -137,7 +143,7 @@ impl Socks5Outbound {
 }
 #[async_trait]
 impl Outbound for Socks5Outbound {
-    async fn handle(&self, addr: &Address) -> std::io::Result<Box<dyn ProxySteam>> {
+    async fn handle(&self, addr: &Address) -> Result<Box<dyn ProxySteam>> {
         let d = self.addr.to_socket_addrs()?.next().ok_or_else(|| {
             new_io_error(format!(
                 "Sock5 outbound address {} has to be a socket address",

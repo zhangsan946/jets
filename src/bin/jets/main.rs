@@ -21,6 +21,9 @@ fn main() -> std::io::Result<()> {
     config
         .inbounds
         .push(InboundConfig::new_socks("127.0.0.1", 1080));
+    config
+        .inbounds
+        .push(InboundConfig::new_http("127.0.0.1", 1090));
 
     // config.outbounds.push(OutboundConfig::new_socks("127.0.0.1", 18000));
     // config.outbounds.push(OutboundConfig::new_shadowsocks("127.0.0.1", 1234, method, "password"));
@@ -38,8 +41,12 @@ fn main() -> std::io::Result<()> {
         .push(OutboundConfig::new_blackhole(Some("block".to_string())));
 
     let mut routing_rule = RoutingRule::new("direct".to_string());
-    routing_rule.domain.append(&mut ["geosite:cn".to_string()].to_vec());
-    routing_rule.ip.append(&mut ["geoip:cn".to_string(), "geoip:private".to_string()].to_vec());
+    routing_rule
+        .domain
+        .append(&mut ["geosite:cn".to_string()].to_vec());
+    routing_rule
+        .ip
+        .append(&mut ["geoip:cn".to_string(), "geoip:private".to_string()].to_vec());
     config.routing.rules.push(routing_rule);
 
     let app = App::new(config)?;
