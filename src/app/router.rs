@@ -593,6 +593,9 @@ mod test {
         proxy_routing_rule
             .ip
             .append(&mut ["1.32.197.0/24".to_string(), "8.8.8.8".to_string()].to_vec());
+        proxy_routing_rule
+            .ip
+            .append(&mut ["fd00::/16".to_string(), "fd01::1".to_string()].to_vec());
 
         direct_routing_rule
             .ip
@@ -617,8 +620,20 @@ mod test {
             router.pick(&Address::from_str("8.8.8.8:0").unwrap(), &None)
         );
         assert_eq!(
+            proxy_tag,
+            router.pick(&Address::from_str("[fd00::1]:0").unwrap(), &None)
+        );
+        assert_eq!(
+            proxy_tag,
+            router.pick(&Address::from_str("[fd01::1]:0").unwrap(), &None)
+        );
+        assert_eq!(
             DEFAULT_OUTBOUND_TAG,
             router.pick(&Address::from_str("1.32.166.1:0").unwrap(), &None)
+        );
+        assert_eq!(
+            DEFAULT_OUTBOUND_TAG,
+            router.pick(&Address::from_str("[fd02::1]:0").unwrap(), &None)
         );
         assert_eq!(
             direct_tag,
