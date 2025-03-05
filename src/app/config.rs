@@ -71,9 +71,27 @@ pub enum SecurityOption {
 }
 
 #[derive(Clone, Debug, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct TlsSettings {
+    pub server_name: Option<String>,
+    pub alpn: Vec<Vec<u8>>,
+}
+
+impl Default for TlsSettings {
+    fn default() -> Self {
+        Self {
+            server_name: None,
+            alpn: vec![b"h2".to_vec(), b"http/1.1".to_vec()],
+        }
+    }
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
 pub struct StreamSettings {
     pub network: NetworkOption,
     pub security: SecurityOption,
+    pub tls_settings: TlsSettings,
 }
 
 impl Default for StreamSettings {
@@ -81,6 +99,7 @@ impl Default for StreamSettings {
         Self {
             network: NetworkOption::Tcp,
             security: SecurityOption::None,
+            tls_settings: TlsSettings::default(),
         }
     }
 }
@@ -92,33 +111,34 @@ pub enum InboundProtocolOption {
     Http,
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum SocksAuthOption {
+    #[default]
     NoAuth,
     Password,
 }
 
 #[derive(Clone, Debug, Deserialize)]
-pub struct SocksAccount {
+pub struct Account {
     pub user: String,
     pub pass: String,
-}
-
-fn default_socks_auth() -> SocksAuthOption {
-    SocksAuthOption::NoAuth
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]
 #[serde(untagged)]
 pub enum InboundSettings {
     Socks {
-        #[serde(default = "default_socks_auth")]
+        #[serde(default)]
         auth: SocksAuthOption,
         #[serde(default)]
-        accounts: Vec<SocksAccount>,
+        accounts: Vec<Account>,
         #[serde(default)]
         udp: bool,
+    },
+    Http {
+        #[serde(default)]
+        accounts: Vec<Account>,
     },
     #[default]
     None,
@@ -165,6 +185,11 @@ impl InboundConfig {
 
     pub fn new_socks<S: Into<String>>(listen: S, port: u16) -> Self {
         Self::new(listen, port, InboundProtocolOption::Socks)
+    }
+
+    #[cfg(feature = "local-http")]
+    pub fn new_http<S: Into<String>>(listen: S, port: u16) -> Self {
+        Self::new(listen, port, InboundProtocolOption::Http)
     }
 }
 

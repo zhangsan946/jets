@@ -1,18 +1,23 @@
 pub mod blackhole;
 pub mod freedom;
+#[cfg(feature = "local-http")]
+pub mod http;
 pub mod shadowsocks;
 pub mod socks;
 pub mod vless;
 
+use crate::app::router::Router;
 use crate::common::Address;
 use async_trait::async_trait;
 use bytes::BufMut;
 use futures::ready;
-use std::io;
-use std::net::SocketAddr;
+use std::collections::HashMap;
+use std::io::{ErrorKind, Result};
 use std::pin::Pin;
+use std::sync::Arc;
 use std::task::{Context, Poll};
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
+use tokio::net::TcpStream;
 
 pub trait AsAny: 'static {
     fn as_any(&self) -> &dyn std::any::Any;
@@ -29,13 +34,13 @@ impl<T: 'static> AsAny for T {
 }
 
 pub trait ProxySteam: AsyncRead + AsyncWrite + Unpin + Send + AsAny {
-    fn poll_read_exact(&mut self, cx: &mut Context<'_>, buf: &mut [u8]) -> Poll<io::Result<usize>>;
+    fn poll_read_exact(&mut self, cx: &mut Context<'_>, buf: &mut [u8]) -> Poll<Result<usize>>;
 }
 impl<T: AsyncRead + AsyncWrite + Unpin + Send + AsAny> ProxySteam for T {
-    fn poll_read_exact(&mut self, cx: &mut Context<'_>, buf: &mut [u8]) -> Poll<io::Result<usize>> {
+    fn poll_read_exact(&mut self, cx: &mut Context<'_>, buf: &mut [u8]) -> Poll<Result<usize>> {
         let size = buf.len();
         if size == 0 {
-            return Err(io::ErrorKind::InvalidInput.into()).into();
+            return Err(ErrorKind::InvalidInput.into()).into();
         }
 
         let mut read_size = 0;
@@ -53,7 +58,7 @@ impl<T: AsyncRead + AsyncWrite + Unpin + Send + AsAny> ProxySteam for T {
             let n = read_buf.filled().len();
             if n == 0 {
                 if read_size > 0 {
-                    return Err(io::ErrorKind::UnexpectedEof.into()).into();
+                    return Err(ErrorKind::UnexpectedEof.into()).into();
                 } else {
                     return Ok(0).into();
                 }
@@ -74,9 +79,11 @@ pub trait Inbound: Sync + Send {
     fn clone_box(&self) -> Box<dyn Inbound>;
     async fn handle(
         &self,
-        mut stream: Box<dyn ProxySteam>,
-        peer_addr: &SocketAddr,
-    ) -> std::io::Result<(Box<dyn ProxySteam>, Address)>;
+        stream: TcpStream,
+        inbound_tag: Option<String>,
+        outbounds: Arc<HashMap<String, Arc<Box<dyn Outbound>>>>,
+        router: Arc<Router>,
+    ) -> Result<()>;
 }
 
 impl Clone for Box<dyn Inbound> {
@@ -87,7 +94,7 @@ impl Clone for Box<dyn Inbound> {
 
 #[async_trait]
 pub trait Outbound: Sync + Send {
-    async fn handle(&self, addr: &Address) -> std::io::Result<Box<dyn ProxySteam>>;
+    async fn handle(&self, addr: &Address) -> Result<Box<dyn ProxySteam>>;
 }
 
 pub mod request_command {

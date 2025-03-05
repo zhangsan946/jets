@@ -5,11 +5,12 @@ pub mod stream;
 pub mod xtls;
 
 use super::{Outbound, ProxySteam};
-use crate::app::config::VlessFlow;
+use crate::app::config::{TlsSettings, VlessFlow};
 use crate::common::{Address, ConnectOpts};
 use crate::transport::tls::Tls;
 use async_trait::async_trait;
 use bytes::BytesMut;
+use std::io::Result;
 use stream::{VlessHeaderRequest, VlessStream};
 use tokio::io::AsyncWriteExt;
 use uuid::Uuid;
@@ -24,14 +25,19 @@ pub struct VlessOutbound {
 }
 
 impl VlessOutbound {
-    pub fn new(addr: Address, id: Uuid, flow: VlessFlow) -> Self {
-        Self {
+    pub fn new(
+        addr: Address,
+        id: Uuid,
+        flow: VlessFlow,
+        tls_settings: TlsSettings,
+    ) -> Result<Self> {
+        Ok(Self {
             addr,
             id,
             flow,
             connect_opts: ConnectOpts::default(),
-            tls: Tls::default(),
-        }
+            tls: Tls::new(tls_settings)?,
+        })
     }
 }
 

@@ -2,12 +2,12 @@ use super::super::{address_type, request_command, ProxySteam};
 use super::addons::Addons;
 use super::xtls::{TrafficState, VisionReader, VisionWriter};
 use super::VlessFlow;
-use crate::common::{from_str, new_io_error, to_string, Address};
+use crate::common::{from_str, invalid_data_error, to_string, Address};
 use crate::impl_asyncwrite_flush_shutdown;
 use bytes::{BufMut, BytesMut};
 use futures::ready;
 use prost::Message;
-use std::io;
+use std::io::Result;
 use std::net::SocketAddr;
 use std::pin::Pin;
 use std::task::{Context, Poll};
@@ -46,7 +46,7 @@ impl VlessHeaderRequest {
     }
 
     /// Write to a writer
-    pub async fn write_to<W>(&self, w: &mut W) -> io::Result<()>
+    pub async fn write_to<W>(&self, w: &mut W) -> Result<()>
     where
         W: AsyncWrite + Unpin,
     {
@@ -126,7 +126,7 @@ pub struct VlessHeaderResponse {
 }
 
 impl VlessHeaderResponse {
-    pub async fn read_from<R>(r: &mut R) -> io::Result<Self>
+    pub async fn read_from<R>(r: &mut R) -> Result<Self>
     where
         R: AsyncRead + Unpin,
     {
@@ -194,7 +194,7 @@ where
         self: Pin<&mut Self>,
         cx: &mut Context<'_>,
         buf: &mut ReadBuf<'_>,
-    ) -> Poll<io::Result<()>> {
+    ) -> Poll<Result<()>> {
         let this = self.get_mut();
         loop {
             match this.read_state {
@@ -202,7 +202,7 @@ where
                     ready!(this.stream.poll_read_exact(cx, buffer))?;
                     let ver = buffer[0];
                     if ver != VLESS_VERSION {
-                        return Err(new_io_error(format!(
+                        return Err(invalid_data_error(format!(
                             "Invalid VLESS version {} received",
                             ver
                         )))
@@ -234,7 +234,7 @@ where
                     // It seems that it won't response the same vless flow in request
                     // if this.flow != flow {
                     //     log::error!("Invalid VLESS flow {} received", flow);
-                    //     return Err(new_io_error(format!(
+                    //     return Err(invalid_data_error(format!(
                     //         "Invalid VLESS flow {} received",
                     //         flow
                     //     )))
@@ -267,11 +267,7 @@ impl<S> AsyncWrite for VlessStream<S>
 where
     S: ProxySteam,
 {
-    fn poll_write(
-        self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-        buf: &[u8],
-    ) -> Poll<io::Result<usize>> {
+    fn poll_write(self: Pin<&mut Self>, cx: &mut Context<'_>, buf: &[u8]) -> Poll<Result<usize>> {
         let this = self.get_mut();
         log::debug!(
             "{} Writing buf size: {} of {}",

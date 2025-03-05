@@ -6,7 +6,7 @@ This project is still in the very early development stage. Welcome anyone intere
 
 - Inbound
 	- socks(✅ socks5, ❌ socks4)
-	- ❌ http
+	- ✅ http
 	- ❌ tun
 
 - Outbound
@@ -27,7 +27,7 @@ This project is still in the very early development stage. Welcome anyone intere
 
 - Other
 	- ❌ Connection timeout & options
-	- ❌ socks auth
+	- ❌ socks & http auth
 	- ❌ UDP
 	- ❌ more protocols & configurations
 

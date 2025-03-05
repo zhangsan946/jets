@@ -1,11 +1,11 @@
 use super::config::RoutingConfig;
 use super::dat::{Cidr, Domain as ProtoDomain, GeoIpList, GeoSiteList};
-use crate::common::{new_io_error, Address};
+use crate::common::{invalid_input_error, Address};
 use prost::Message;
 use regex::Regex;
 use std::collections::hash_map::Entry;
 use std::collections::{HashMap, HashSet};
-use std::io::{Error, ErrorKind, Result};
+use std::io::{Error, Result};
 use std::net::{IpAddr, Ipv6Addr, SocketAddr};
 use std::path::PathBuf;
 use std::str::FromStr;
@@ -60,8 +60,9 @@ impl Router {
                                         }
                                         Err(e) => {
                                             log::warn!(
-                                                "Invalid domain {} convention, error: {}",
+                                                "Invalid domain {} in code {}, error: {}",
                                                 item.value,
+                                                real_code,
                                                 e
                                             );
                                         }
@@ -71,20 +72,17 @@ impl Router {
                                 domains.push(code);
                             }
                             None => {
-                                return Err(Error::new(
-                                    ErrorKind::InvalidInput,
-                                    format!("Geosite does not contain the code of {}", real_code),
-                                ))
+                                return Err(invalid_input_error(format!(
+                                    "Geosite does not contain the code of {}",
+                                    real_code
+                                )))
                             }
                         }
                     }
                 } else if domain.starts_with("regexp:") {
                     let regex = &domain.split_off(7);
                     let regex = Regex::new(regex).map_err(|_| {
-                        Error::new(
-                            ErrorKind::InvalidData,
-                            format!("Invalid regex value of {}", regex),
-                        )
+                        invalid_input_error(format!("Invalid regex value of {}", regex))
                     })?;
                     let new_domain = Domain::new(MatchType::Regex(regex));
                     new_domain_site.push(new_domain);
@@ -135,28 +133,22 @@ impl Router {
                                 ips.push(code);
                             }
                             None => {
-                                return Err(Error::new(
-                                    ErrorKind::InvalidInput,
-                                    format!("Geoip does not contain the code of {}", code),
-                                ))
+                                return Err(invalid_input_error(format!(
+                                    "Geoip does not contain the code of {}",
+                                    code
+                                )))
                             }
                         }
                     }
                 } else if let Some(index) = ip.find('/') {
-                    let prefix = u32::from_str(&ip[(index + 1)..]).map_err(|_| {
-                        Error::new(
-                            ErrorKind::InvalidInput,
-                            format!("Invalid ip prefix of {}", ip),
-                        )
-                    })?;
+                    let prefix = u32::from_str(&ip[(index + 1)..])
+                        .map_err(|_| invalid_input_error(format!("Invalid ip prefix of {}", ip)))?;
                     let ip = &ip[..index];
-                    let ip = IpAddr::from_str(ip).map_err(|_| {
-                        Error::new(ErrorKind::InvalidInput, format!("Invalid ip of {}", ip))
-                    })?;
+                    let ip = IpAddr::from_str(ip)
+                        .map_err(|_| invalid_input_error(format!("Invalid ip of {}", ip)))?;
                     new_ip_site.push(IpRange { ip, prefix });
                 } else {
-                    let ip = IpAddr::from_str(&ip)
-                        .map_err(|e| Error::new(ErrorKind::InvalidInput, e))?;
+                    let ip = IpAddr::from_str(&ip).map_err(invalid_input_error)?;
                     let prefix = match ip {
                         IpAddr::V4(_) => 32,
                         IpAddr::V6(_) => 128,
@@ -316,12 +308,10 @@ impl TryFrom<ProtoDomain> for Domain {
     fn try_from(value: ProtoDomain) -> Result<Self> {
         let match_type = match value.r#type {
             0 => MatchType::Substr(value.value),
-            1 => MatchType::Regex(
-                Regex::new(&value.value).map_err(|e| Error::new(ErrorKind::InvalidData, e))?,
-            ),
+            1 => MatchType::Regex(Regex::new(&value.value).map_err(invalid_input_error)?),
             2 => MatchType::SubDomain(value.value),
             3 => MatchType::FullDomain(value.value),
-            _ => return Err(new_io_error("Proto Domain definiation error")),
+            t => return Err(invalid_input_error(format!("Invalid type of value {}", t))),
         };
         let attrs: Vec<String> = value.attribute.into_iter().map(|attr| attr.key).collect();
         Ok(Self { match_type, attrs })
@@ -368,37 +358,31 @@ impl TryFrom<Cidr> for IpRange {
     fn try_from(value: Cidr) -> Result<Self> {
         let ip = if value.ip.len() == 4 {
             let ip: [u8; 4] = value.ip.try_into().map_err(|e: Vec<u8>| {
-                Error::new(
-                    ErrorKind::InvalidData,
-                    format!("Expect 4 bytes, got {}", e.len()),
-                )
+                invalid_input_error(format!("Expect 4 bytes, got {}", e.len()))
             })?;
             if value.prefix > 32 {
-                return Err(Error::new(
-                    ErrorKind::InvalidData,
-                    format!("Invalid prefix of {} for ipv4 address", value.prefix),
-                ));
+                return Err(invalid_input_error(format!(
+                    "Invalid prefix of {} for ipv4 address",
+                    value.prefix
+                )));
             }
             IpAddr::from(ip)
         } else if value.ip.len() == 16 {
             let ip: [u8; 16] = value.ip.try_into().map_err(|e: Vec<u8>| {
-                Error::new(
-                    ErrorKind::InvalidData,
-                    format!("Expect 16 bytes, got {}", e.len()),
-                )
+                invalid_input_error(format!("Expect 16 bytes, got {}", e.len()))
             })?;
             if value.prefix > 128 {
-                return Err(Error::new(
-                    ErrorKind::InvalidData,
-                    format!("Invalid prefix of {} for ipv6 address", value.prefix),
-                ));
+                return Err(invalid_input_error(format!(
+                    "Invalid prefix of {} for ipv6 address",
+                    value.prefix
+                )));
             }
             IpAddr::from(ip)
         } else {
-            return Err(Error::new(
-                ErrorKind::InvalidData,
-                format!("Unexpected IP length {}", value.ip.len()),
-            ));
+            return Err(invalid_input_error(format!(
+                "Unexpected IP length {}",
+                value.ip.len()
+            )));
         };
         Ok(Self {
             ip,
@@ -593,6 +577,9 @@ mod test {
         proxy_routing_rule
             .ip
             .append(&mut ["1.32.197.0/24".to_string(), "8.8.8.8".to_string()].to_vec());
+        proxy_routing_rule
+            .ip
+            .append(&mut ["fd00::/16".to_string(), "fd01::1".to_string()].to_vec());
 
         direct_routing_rule
             .ip
@@ -617,8 +604,20 @@ mod test {
             router.pick(&Address::from_str("8.8.8.8:0").unwrap(), &None)
         );
         assert_eq!(
+            proxy_tag,
+            router.pick(&Address::from_str("[fd00::1]:0").unwrap(), &None)
+        );
+        assert_eq!(
+            proxy_tag,
+            router.pick(&Address::from_str("[fd01::1]:0").unwrap(), &None)
+        );
+        assert_eq!(
             DEFAULT_OUTBOUND_TAG,
             router.pick(&Address::from_str("1.32.166.1:0").unwrap(), &None)
+        );
+        assert_eq!(
+            DEFAULT_OUTBOUND_TAG,
+            router.pick(&Address::from_str("[fd02::1]:0").unwrap(), &None)
         );
         assert_eq!(
             direct_tag,

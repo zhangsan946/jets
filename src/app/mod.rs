@@ -4,7 +4,7 @@ pub mod dat {
 }
 pub mod router;
 
-use crate::common::copy_bidirectional;
+use crate::common::{copy_bidirectional, invalid_input_error, Address};
 use crate::proxy::{Inbound, Outbound, ProxySteam};
 use actix_server::Server;
 use actix_service::fn_service;
@@ -25,7 +25,7 @@ impl App {
     pub fn new(config: Config) -> Result<Self> {
         let mut inbounds: Vec<(Option<String>, Box<dyn Inbound>)> = Vec::new();
         let mut inbound_tags: HashSet<String> = HashSet::new();
-        for inbound in config.inbounds.iter() {
+        for inbound in config.inbounds.into_iter() {
             let tag = inbound.tag.clone();
             if let Some(ref val) = tag {
                 if !inbound_tags.insert(val.clone()) {
@@ -39,7 +39,7 @@ impl App {
         }
 
         let mut outbounds: HashMap<String, Arc<Box<dyn Outbound>>> = HashMap::new();
-        for (index, outbound) in config.outbounds.iter().enumerate() {
+        for (index, outbound) in config.outbounds.into_iter().enumerate() {
             let tag = outbound.tag.clone();
             let outbound = Arc::new(parse_outbound(outbound)?);
             if index == 0 {
@@ -93,32 +93,8 @@ impl App {
                             let peer_addr = stream.peer_addr()?;
                             let local_addr = stream.local_addr()?;
                             log::debug!("{} -> {}", peer_addr, local_addr);
-                            let stream: Box<dyn ProxySteam> = Box::new(stream);
-                            match inbound.handle(stream, &peer_addr).await {
-                                Ok((mut stream, address)) => {
-                                    let outbound_tag = router.pick(&address, &inbound_tag);
-                                    let outbound =
-                                        outbounds.get(&outbound_tag).unwrap_or_else(|| {
-                                            log::warn!(
-                                                "Routing to outbound with tag {} not found",
-                                                outbound_tag
-                                            );
-                                            log::warn!("Using default outbound");
-                                            outbounds
-                                                .get(DEFAULT_OUTBOUND_TAG)
-                                                .expect("default outbound")
-                                        });
-                                    let mut down_stream =
-                                        outbound.handle(&address).await.map_err(|e| {
-                                            log::error!(
-                                                "Connection to {} failed: {:#}",
-                                                address,
-                                                e
-                                            );
-                                            e
-                                        })?;
-                                    return copy_bidirectional(&mut stream, &mut down_stream).await;
-                                }
+                            match inbound.handle(stream, inbound_tag, outbounds, router).await {
+                                Ok(_) => Ok(()),
                                 Err(e) => {
                                     log::error!("Inbound {} failed: {:#}", inbound.addr(), e);
                                     Err(e)
@@ -134,7 +110,41 @@ impl App {
     }
 }
 
-use crate::common::Address;
+pub(crate) async fn establish_tcp_tunnel(
+    mut stream: Box<dyn ProxySteam>,
+    address: &Address,
+    inbound_tag: &Option<String>,
+    outbounds: Arc<HashMap<String, Arc<Box<dyn Outbound>>>>,
+    router: Arc<Router>,
+) -> Result<()> {
+    let mut down_stream = connect_host(address, inbound_tag, outbounds, router).await?;
+    return copy_bidirectional(&mut stream, &mut down_stream)
+        .await
+        .map(|_| ());
+}
+
+pub(crate) async fn connect_host(
+    address: &Address,
+    inbound_tag: &Option<String>,
+    outbounds: Arc<HashMap<String, Arc<Box<dyn Outbound>>>>,
+    router: Arc<Router>,
+) -> Result<Box<dyn ProxySteam>> {
+    let outbound_tag = router.pick(address, inbound_tag);
+    let outbound = outbounds.get(&outbound_tag).unwrap_or_else(|| {
+        log::warn!("Routing to outbound with tag {} not found", outbound_tag);
+        log::warn!("Using default outbound");
+        outbounds
+            .get(DEFAULT_OUTBOUND_TAG)
+            .expect("default outbound")
+    });
+    outbound.handle(address).await.map_err(|e| {
+        log::error!("Connection to {} failed: {:#}", address, e);
+        e
+    })
+}
+
+#[cfg(feature = "local-http")]
+use crate::proxy::http::HttpInbound;
 use crate::proxy::{
     blackhole::BlackholeOutbound,
     freedom::FreedomOutbound,
@@ -143,76 +153,95 @@ use crate::proxy::{
     vless::VlessOutbound,
 };
 use config::{
-    InboundConfig, InboundProtocolOption, OutboundConfig, OutboundProtocolOption, OutboundSettings,
+    InboundConfig, InboundProtocolOption, InboundSettings, OutboundConfig, OutboundProtocolOption,
+    OutboundSettings,
 };
 use std::str::FromStr;
-fn parse_inbound(inbound: &InboundConfig) -> Result<Box<dyn Inbound>> {
+fn parse_inbound(inbound: InboundConfig) -> Result<Box<dyn Inbound>> {
     match inbound.protocol {
-        InboundProtocolOption::Http => todo!("http inbound"),
+        #[cfg(feature = "local-http")]
+        InboundProtocolOption::Http => {
+            let addr = format!("{}:{}", inbound.listen, inbound.port);
+            let addr = Address::from_str(&addr).map_err(|_| invalid_input_error(addr))?;
+            let accounts = if let InboundSettings::Http { accounts } = inbound.settings {
+                accounts
+            } else {
+                Vec::new()
+            };
+            let http_inbound = HttpInbound::new(addr, accounts);
+            Ok(Box::new(http_inbound) as Box<dyn Inbound>)
+        }
+        #[cfg(not(feature = "local-http"))]
+        InboundProtocolOption::Http => Err(Error::new(
+            ErrorKind::Unsupported,
+            "Found http inbound but local-http is not enabled",
+        )),
         InboundProtocolOption::Socks => {
             let addr = format!("{}:{}", inbound.listen, inbound.port);
-            let addr =
-                Address::from_str(&addr).map_err(|_| Error::new(ErrorKind::InvalidInput, addr))?;
-            let socks_inbound = SocksInbound::new(addr, vec![]);
+            let addr = Address::from_str(&addr).map_err(|_| invalid_input_error(addr))?;
+            let accounts = if let InboundSettings::Socks {
+                auth: _,
+                accounts,
+                udp: _,
+            } = inbound.settings
+            {
+                accounts
+            } else {
+                Vec::new()
+            };
+            let socks_inbound = SocksInbound::new(addr, accounts);
             Ok(Box::new(socks_inbound) as Box<dyn Inbound>)
         }
     }
 }
 
-fn parse_outbound(outbound: &OutboundConfig) -> Result<Box<dyn Outbound>> {
+fn parse_outbound(outbound: OutboundConfig) -> Result<Box<dyn Outbound>> {
     match outbound.protocol {
         OutboundProtocolOption::Blackhole => Ok(Box::new(BlackholeOutbound) as Box<dyn Outbound>),
         OutboundProtocolOption::Freedom => {
             Ok(Box::new(FreedomOutbound::default()) as Box<dyn Outbound>)
         }
         OutboundProtocolOption::Socks => {
-            if let OutboundSettings::Socks { ref servers } = outbound.settings {
+            if let OutboundSettings::Socks { mut servers } = outbound.settings {
                 if !servers.is_empty() {
-                    let server = &servers[0];
+                    let server = servers.remove(0);
                     let addr = format!("{}:{}", server.address, server.port);
-                    let addr = Address::from_str(&addr)
-                        .map_err(|_| Error::new(ErrorKind::InvalidInput, addr))?;
-                    let outbound = Socks5Outbound::new(addr, vec![]);
+                    let addr = Address::from_str(&addr).map_err(|_| invalid_input_error(addr))?;
+                    let outbound = Socks5Outbound::new(addr, server.users);
                     return Ok(Box::new(outbound) as Box<dyn Outbound>);
                 }
             }
-            Err(Error::new(
-                ErrorKind::InvalidInput,
-                "Invalid socks outbound",
-            ))
+            Err(invalid_input_error("Invalid socks outbound"))
         }
         OutboundProtocolOption::Shadowsocks => {
-            if let OutboundSettings::Shadowsocks { ref servers } = outbound.settings {
+            if let OutboundSettings::Shadowsocks { mut servers } = outbound.settings {
                 if !servers.is_empty() {
-                    let server = &servers[0];
+                    let server = servers.remove(0);
                     let addr = format!("{}:{}", server.address, server.port);
-                    let addr = Address::from_str(&addr)
-                        .map_err(|_| Error::new(ErrorKind::InvalidInput, addr))?;
-                    let outbound = ShadowsocksOutbound::new(addr, &server.password, server.method)?;
+                    let addr = Address::from_str(&addr).map_err(|_| invalid_input_error(addr))?;
+                    let outbound = ShadowsocksOutbound::new(addr, server.password, server.method)?;
                     return Ok(Box::new(outbound) as Box<dyn Outbound>);
                 }
             }
-            Err(Error::new(
-                ErrorKind::InvalidInput,
-                "Invalid shadowsocks outbound",
-            ))
+            Err(invalid_input_error("Invalid shadowsocks outbound"))
         }
         OutboundProtocolOption::Vless => {
-            if let OutboundSettings::Vless { ref vnext } = outbound.settings {
+            if let OutboundSettings::Vless { mut vnext } = outbound.settings {
                 if !vnext.is_empty() && !vnext[0].users.is_empty() {
-                    let server = &vnext[0];
+                    let mut server = vnext.remove(0);
                     let addr = format!("{}:{}", server.address, server.port);
-                    let addr = Address::from_str(&addr)
-                        .map_err(|_| Error::new(ErrorKind::InvalidInput, addr))?;
-                    let user = &server.users[0];
-                    let outbound = VlessOutbound::new(addr, user.id, user.flow);
+                    let addr = Address::from_str(&addr).map_err(|_| invalid_input_error(addr))?;
+                    let user = server.users.remove(0);
+                    let outbound = VlessOutbound::new(
+                        addr,
+                        user.id,
+                        user.flow,
+                        outbound.stream_settings.tls_settings,
+                    )?;
                     return Ok(Box::new(outbound) as Box<dyn Outbound>);
                 }
             }
-            Err(Error::new(
-                ErrorKind::InvalidInput,
-                "Invalid vless outbound",
-            ))
+            Err(invalid_input_error("Invalid vless outbound"))
         }
     }
 }

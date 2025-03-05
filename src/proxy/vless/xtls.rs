@@ -1,5 +1,5 @@
 use super::super::ProxySteam;
-use crate::common::{find_str_in_str, new_io_error, DEFAULT_BUF_SIZE};
+use crate::common::{find_str_in_str, DEFAULT_BUF_SIZE};
 use crate::transport::tls::{AsRawTcp, TlsStream};
 use bytes::{Buf, BufMut, BytesMut};
 use futures::ready;
@@ -174,17 +174,16 @@ impl VisionWriter {
             let tls_stream = stream
                 .as_any_mut()
                 .downcast_mut::<TlsStream>()
-                .ok_or_else(|| new_io_error("Invalid tls stream"))?;
+                .expect("tls stream");
             let tcp_stream = tls_stream.as_raw_tcp();
             return Pin::new(tcp_stream).poll_write(cx, bytes);
         }
         loop {
             if self.buffer.is_empty() {
-                if traffic_state.number_of_packet_to_filter > 0 {
-                    xtls_filter_tls(bytes, traffic_state, "Writer");
-                }
-
                 self.buffer = if traffic_state.need_padding {
+                    if traffic_state.number_of_packet_to_filter > 0 {
+                        xtls_filter_tls(bytes, traffic_state, "Writer");
+                    }
                     // TODO: maybe
                     // mb = ReshapeMultiBuffer(w.ctx, bytes)
                     if traffic_state.is_tls
@@ -262,7 +261,7 @@ impl VisionReader {
             let tls_stream = stream
                 .as_any_mut()
                 .downcast_mut::<TlsStream>()
-                .ok_or_else(|| new_io_error("Invalid tls stream"))?;
+                .expect("tls stream");
             let tcp_stream = tls_stream.as_raw_tcp();
             return Pin::new(tcp_stream).poll_read(cx, buf);
         }
@@ -284,10 +283,10 @@ impl VisionReader {
                 self.filled_size = read_buffer.filled().len();
             } else {
                 let mut buffer = BytesMut::from(&self.buffer[..self.filled_size]);
-                if traffic_state.within_padding_buffers
+                let bytes_left = if traffic_state.within_padding_buffers
                     || traffic_state.number_of_packet_to_filter > 0
                 {
-                    xtls_unpadding(&mut buffer, traffic_state);
+                    let bytes_left = xtls_unpadding(&mut buffer, traffic_state);
                     if traffic_state.remaining_content > 0
                         || traffic_state.remaining_padding > 0
                         || traffic_state.padding_command == PaddingCommand::Continue
@@ -306,11 +305,25 @@ impl VisionReader {
                             traffic_state.padding_command
                         )
                     }
-                }
-                if traffic_state.number_of_packet_to_filter > 0 {
-                    xtls_filter_tls(&buffer, traffic_state, "Reader");
-                }
+                    if traffic_state.number_of_packet_to_filter > 0 {
+                        xtls_filter_tls(&buffer, traffic_state, "Reader");
+                    }
+                    bytes_left
+                } else {
+                    None
+                };
                 buf.put_slice(&buffer);
+                if let Some(bytes_left) = bytes_left {
+                    log::debug!(
+                        "{} Xtls package has {} bytes remaining after unpadding ",
+                        traffic_state.stream_id,
+                        bytes_left.len()
+                    );
+                    let mut read_buffer = ReadBuf::new(&mut self.buffer);
+                    read_buffer.put_slice(&bytes_left);
+                    self.filled_size = bytes_left.len();
+                    continue;
+                }
                 self.filled_size = 0;
                 return Ok(()).into();
             }
@@ -362,7 +375,7 @@ fn xtls_padding(
     buf
 }
 
-fn xtls_unpadding(bytes: &mut BytesMut, traffic_state: &mut TrafficState) {
+fn xtls_unpadding(bytes: &mut BytesMut, traffic_state: &mut TrafficState) -> Option<BytesMut> {
     if traffic_state.remaining_content == 0 && traffic_state.remaining_padding == 0 {
         if traffic_state.padding_command == PaddingCommand::Unknown(255) {
             if bytes.len() >= 21 && bytes[0..16] == *traffic_state.uuid.as_bytes() {
@@ -373,7 +386,7 @@ fn xtls_unpadding(bytes: &mut BytesMut, traffic_state: &mut TrafficState) {
                     traffic_state.stream_id,
                     bytes.len()
                 );
-                return;
+                return None;
             }
         }
         traffic_state.padding_command = PaddingCommand::from(bytes[0]);
@@ -395,14 +408,22 @@ fn xtls_unpadding(bytes: &mut BytesMut, traffic_state: &mut TrafficState) {
     }
     traffic_state.remaining_content -= content_len;
 
-    if traffic_state.remaining_content == 0 {
+    let bytes_left = if traffic_state.remaining_content == 0 {
         let mut padding_len = traffic_state.remaining_padding;
-        if (bytes.len() - content_len) < padding_len {
+        if (bytes.len() - content_len) <= padding_len {
             padding_len = bytes.len() - content_len;
+            bytes.truncate(bytes.len() - padding_len);
+            traffic_state.remaining_padding -= padding_len;
+            None
+        } else {
+            let mut bytes_left = bytes.split_off(content_len);
+            let bytes_left = bytes_left.split_off(traffic_state.remaining_padding);
+            traffic_state.remaining_padding = 0;
+            Some(bytes_left)
         }
-        bytes.truncate(bytes.len() - padding_len);
-        traffic_state.remaining_padding -= padding_len;
-    }
+    } else {
+        None
+    };
 
     log::debug!(
         "{} Xtls Unpadding remaining_content: {}, remaining_padding: {}, command: {}",
@@ -411,6 +432,8 @@ fn xtls_unpadding(bytes: &mut BytesMut, traffic_state: &mut TrafficState) {
         traffic_state.remaining_padding,
         traffic_state.padding_command
     );
+
+    bytes_left
 }
 
 // https://github.com/XTLS/Xray-core/blob/6b6fbcb459a870c5c5cda17ed0f6886d39b9a6cf/proxy/proxy.go#L415

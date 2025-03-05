@@ -6,7 +6,7 @@ use shadowsocks::context::{Context, SharedContext};
 pub use shadowsocks::net::{ConnectOpts, TcpStream};
 pub use shadowsocks::relay::Address;
 //pub use shadowsocks::relay::tcprelay::utils::copy_bidirectional;
-use std::io;
+use std::io::{Error, ErrorKind, Result};
 use tokio::io::{copy_bidirectional_with_sizes, AsyncRead, AsyncWrite};
 
 pub const DEFAULT_BUF_SIZE: usize = 8 * 1024;
@@ -14,17 +14,18 @@ pub const DEFAULT_BUF_SIZE: usize = 8 * 1024;
 pub static DEFAULT_CONTEXT: Lazy<SharedContext> =
     Lazy::new(|| Context::new_shared(ServerType::Local));
 
-pub fn new_io_error<T: ToString>(message: T) -> io::Error {
-    io::Error::new(
-        io::ErrorKind::Other,
-        format!("Error: {}", message.to_string()),
-    )
+pub fn invalid_input_error<T: ToString>(message: T) -> Error {
+    Error::new(ErrorKind::InvalidInput, message.to_string())
 }
 
-pub fn from_str<'a, T: Deserialize<'a>>(s: &'a str) -> io::Result<T> {
+pub fn invalid_data_error<T: ToString>(message: T) -> Error {
+    Error::new(ErrorKind::InvalidData, message.to_string())
+}
+
+pub fn from_str<'a, T: Deserialize<'a>>(s: &'a str) -> Result<T> {
     // https://docs.rs/serde/latest/serde/de/value/index.html
-    let result = T::deserialize(s.into_deserializer())
-        .map_err(|_: value::Error| io::Error::new(io::ErrorKind::InvalidInput, s))?;
+    let result =
+        T::deserialize(s.into_deserializer()).map_err(|_: value::Error| invalid_input_error(s))?;
     Ok(result)
 }
 
@@ -38,7 +39,7 @@ pub fn find_str_in_str(src: &[u8], target: &[u8]) -> bool {
     src.windows(target.len()).any(|w| w == target)
 }
 
-pub async fn copy_bidirectional<A, B>(a: &mut A, b: &mut B) -> io::Result<(u64, u64)>
+pub async fn copy_bidirectional<A, B>(a: &mut A, b: &mut B) -> Result<(u64, u64)>
 where
     A: AsyncRead + AsyncWrite + Unpin + ?Sized,
     B: AsyncRead + AsyncWrite + Unpin + ?Sized,

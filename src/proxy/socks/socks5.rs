@@ -1,14 +1,18 @@
 use super::super::{Inbound, Outbound, ProxySteam};
 use super::SocksInbound;
-use crate::common::{new_io_error, Address};
+use crate::app::config::SocksUser;
+use crate::app::establish_tcp_tunnel;
+use crate::app::router::Router;
+use crate::common::{invalid_data_error, Address, ConnectOpts, TcpStream, DEFAULT_CONTEXT};
 use async_trait::async_trait;
 use shadowsocks::relay::socks5::{
     self, Command, HandshakeRequest, HandshakeResponse, PasswdAuthRequest, PasswdAuthResponse,
     Reply, TcpRequestHeader, TcpResponseHeader,
 };
 use std::collections::HashMap;
-use std::net::{SocketAddr, ToSocketAddrs};
-use tokio::net::TcpStream;
+use std::io::Result;
+use std::sync::Arc;
+use tokio::net::TcpStream as TokioTcpStream;
 
 #[derive(Clone, Debug)]
 pub struct Socks5Inbound {
@@ -44,9 +48,11 @@ impl Inbound for Socks5Inbound {
 
     async fn handle(
         &self,
-        mut stream: Box<dyn ProxySteam>,
-        peer_addr: &SocketAddr,
-    ) -> std::io::Result<(Box<dyn ProxySteam>, Address)> {
+        mut stream: TokioTcpStream,
+        inbound_tag: Option<String>,
+        outbounds: Arc<HashMap<String, Arc<Box<dyn Outbound>>>>,
+        router: Arc<Router>,
+    ) -> Result<()> {
         // 1. Handshake
         let request = match HandshakeRequest::read_from(&mut stream).await {
             Ok(r) => r,
@@ -58,7 +64,7 @@ impl Inbound for Socks5Inbound {
         match request.methods.first() {
             Some(&socks5::SOCKS5_AUTH_METHOD_NONE) => {
                 if !self.accounts.is_empty() {
-                    return Err(new_io_error("Socks5 authentication is enabled"));
+                    return Err(invalid_data_error("Socks5 authentication is enabled"));
                 }
                 let response = HandshakeResponse::new(socks5::SOCKS5_AUTH_METHOD_NONE);
                 response.write_to(&mut stream).await?;
@@ -72,7 +78,7 @@ impl Inbound for Socks5Inbound {
                         let response = PasswdAuthResponse::new(err.as_reply().as_u8());
                         response.write_to(&mut stream).await?;
 
-                        return Err(new_io_error(format!(
+                        return Err(invalid_data_error(format!(
                             "Socks5 authentication request failed: {err}"
                         )));
                     }
@@ -82,7 +88,7 @@ impl Inbound for Socks5Inbound {
             method => {
                 let response = HandshakeResponse::new(socks5::SOCKS5_AUTH_METHOD_NOT_ACCEPTABLE);
                 response.write_to(&mut stream).await?;
-                return Err(new_io_error(format!(
+                return Err(invalid_data_error(format!(
                     "Unsupported socks5 authentication method {:?}",
                     method
                 )));
@@ -95,7 +101,7 @@ impl Inbound for Socks5Inbound {
             Err(err) => {
                 let response = TcpResponseHeader::new(
                     err.as_reply(),
-                    Address::SocketAddress(peer_addr.to_owned()),
+                    Address::SocketAddress(stream.peer_addr()?),
                 );
                 response.write_to(&mut stream).await?;
                 return Err(err.into());
@@ -106,20 +112,20 @@ impl Inbound for Socks5Inbound {
         // 3. Handle Command
         match request.command {
             Command::TcpConnect => {
-                let response = TcpResponseHeader::new(socks5::Reply::Succeeded, self.addr.clone());
+                let response = TcpResponseHeader::new(Reply::Succeeded, self.addr.clone());
                 response.write_to(&mut stream).await?;
             }
             Command::UdpAssociate => {
                 todo!("socks5 udp");
             }
             Command::TcpBind => {
-                let response = TcpResponseHeader::new(socks5::Reply::CommandNotSupported, address);
+                let response = TcpResponseHeader::new(Reply::CommandNotSupported, address);
                 response.write_to(&mut stream).await?;
-                return Err(new_io_error("Socks5 tcp bind is not supported"));
+                return Err(invalid_data_error("Socks5 tcp bind is not supported"));
             }
         }
-
-        Ok((stream, address))
+        let stream: Box<dyn ProxySteam> = Box::new(stream);
+        establish_tcp_tunnel(stream, &address, &inbound_tag, outbounds, router).await
     }
 }
 
@@ -127,24 +133,25 @@ impl Inbound for Socks5Inbound {
 pub struct Socks5Outbound {
     addr: Address,
     accounts: HashMap<String, String>,
+    connect_opts: ConnectOpts,
 }
 
 impl Socks5Outbound {
-    pub fn new(addr: Address, accounts: Vec<(String, String)>) -> Self {
-        let accounts: HashMap<_, _> = accounts.into_iter().collect();
-        Self { addr, accounts }
+    pub fn new(addr: Address, accounts: Vec<SocksUser>) -> Self {
+        let accounts: HashMap<_, _> = accounts.into_iter().map(|s| (s.user, s.pass)).collect();
+        Self {
+            addr,
+            accounts,
+            connect_opts: ConnectOpts::default(),
+        }
     }
 }
 #[async_trait]
 impl Outbound for Socks5Outbound {
-    async fn handle(&self, addr: &Address) -> std::io::Result<Box<dyn ProxySteam>> {
-        let d = self.addr.to_socket_addrs()?.next().ok_or_else(|| {
-            new_io_error(format!(
-                "Sock5 outbound address {} has to be a socket address",
-                self.addr
-            ))
-        })?;
-        let mut stream = TcpStream::connect(d).await?;
+    async fn handle(&self, addr: &Address) -> Result<Box<dyn ProxySteam>> {
+        let mut stream =
+            TcpStream::connect_remote_with_opts(&DEFAULT_CONTEXT, &self.addr, &self.connect_opts)
+                .await?;
 
         let mut auth_method = socks5::SOCKS5_AUTH_METHOD_NONE;
         if !self.accounts.is_empty() {
@@ -155,7 +162,7 @@ impl Outbound for Socks5Outbound {
         let response = HandshakeResponse::read_from(&mut stream).await?;
 
         if response.chosen_method != auth_method {
-            return Err(new_io_error("Socks5 handshake method dose not match"));
+            return Err(invalid_data_error("Socks5 handshake method dose not match"));
         }
 
         if auth_method == socks5::SOCKS5_AUTH_METHOD_PASSWORD {
@@ -169,11 +176,14 @@ impl Outbound for Socks5Outbound {
 
         match response.reply {
             Reply::Succeeded => {
-                log::info!("Socks5 outbound: {}", response.address);
+                log::debug!("Connected to socks5 server: {}", response.address);
                 let stream: Box<dyn ProxySteam> = Box::new(stream);
                 Ok(stream)
             }
-            reply => Err(new_io_error(reply.to_string())),
+            reply => Err(invalid_data_error(format!(
+                "Sock server reply error: {}",
+                reply
+            ))),
         }
     }
 }

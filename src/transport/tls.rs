@@ -1,36 +1,68 @@
-use crate::common::{new_io_error, Address, ConnectOpts, TcpStream, DEFAULT_CONTEXT};
+use crate::app::config::TlsSettings;
+use crate::common::{
+    invalid_data_error, invalid_input_error, Address, ConnectOpts, TcpStream, DEFAULT_CONTEXT,
+};
 use futures::ready;
+use once_cell::sync::Lazy;
 use rustls::{ClientConfig, ClientConnection, KeyLogFile, RootCertStore};
+//use rustls_native_certs::CertificateResult;
 use rustls_pki_types::ServerName;
 use std::future::poll_fn;
-use std::io::{BufRead, ErrorKind, Read, Result, Write};
+use std::io::{BufRead, Error, ErrorKind, Read, Result, Write};
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 
+pub static ROOT_CERT_STORE: Lazy<Arc<RootCertStore>> = Lazy::new(|| {
+    let mut store = RootCertStore::empty();
+    store.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+
+    // let CertificateResult { certs, errors, .. } =
+    //     rustls_native_certs::load_native_certs();
+    // if !errors.is_empty() {
+    //     for error in errors {
+    //         log::warn!("Failed to load cert (native), error: {}", error);
+    //     }
+    // }
+
+    // for cert in certs {
+    //     if let Err(err) = store.add(cert) {
+    //         log::warn!("Failed to add cert (native), error: {}", err);
+    //     }
+    // }
+
+    Arc::new(store)
+});
+
 #[derive(Clone, Debug)]
 pub struct Tls {
-    server_name: Option<String>,
-    tls_config: ClientConfig,
+    server_name: Option<ServerName<'static>>,
+    tls_config: Arc<ClientConfig>,
 }
 
-impl Default for Tls {
-    fn default() -> Self {
-        let mut root_cert_store = RootCertStore::empty();
-        root_cert_store.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+impl Tls {
+    pub fn new(tls_settings: TlsSettings) -> Result<Self> {
         let mut tls_config = ClientConfig::builder()
-            .with_root_certificates(root_cert_store)
+            .with_root_certificates(ROOT_CERT_STORE.clone())
             .with_no_client_auth();
-        tls_config
-            .alpn_protocols
-            .extend([b"h2".to_vec(), b"http/1.1".to_vec()]);
+        tls_config.alpn_protocols.extend(tls_settings.alpn);
         tls_config.key_log = Arc::new(KeyLogFile::new());
         //tls_config.max_fragment_size = Some(crate::common::DEFAULT_BUF_SIZE);
-        Self {
-            server_name: None,
-            tls_config,
-        }
+        let server_name = if let Some(server_name) = tls_settings.server_name {
+            Some(ServerName::try_from(server_name.clone()).map_err(|_| {
+                invalid_input_error(format!(
+                    "Invalid server name of {} in tls settings",
+                    server_name
+                ))
+            })?)
+        } else {
+            None
+        };
+        Ok(Self {
+            server_name,
+            tls_config: Arc::new(tls_config),
+        })
     }
 }
 
@@ -44,12 +76,17 @@ impl Tls {
         let conn =
             TcpStream::connect_remote_with_opts(&DEFAULT_CONTEXT, addr, connect_opts).await?;
         let dnsname = if let Some(server_name) = &self.server_name {
-            ServerName::try_from(server_name.to_owned()).map_err(new_io_error)?
+            server_name.clone()
         } else {
-            ServerName::try_from(addr.host()).map_err(new_io_error)?
+            ServerName::try_from(addr.host())
+                .map_err(|_| invalid_data_error(format!("Got invalid dns name: {}", addr.host())))?
         };
-        let session = ClientConnection::new(Arc::new(self.tls_config.to_owned()), dnsname)
-            .map_err(new_io_error)?;
+        let session = ClientConnection::new(self.tls_config.clone(), dnsname).map_err(|e| {
+            Error::new(
+                ErrorKind::Other,
+                format!("Unable to create tls session: {}", e),
+            )
+        })?;
         let mut tls_stream = TlsStream::new(conn, session, xtls);
         poll_fn(|cx| tls_stream.handshake(cx)).await?;
         Ok(tls_stream)
@@ -100,7 +137,7 @@ impl TlsStream {
         let n = match self.session.read_tls(&mut reader) {
             Ok(n) => {
                 if n == 0 {
-                    return Poll::Ready(Err(std::io::Error::from(ErrorKind::UnexpectedEof)));
+                    return Poll::Ready(Err(Error::from(ErrorKind::UnexpectedEof)));
                 }
                 n
             }
@@ -111,7 +148,7 @@ impl TlsStream {
         let state = self
             .session
             .process_new_packets()
-            .map_err(|err| std::io::Error::new(ErrorKind::InvalidData, err))?;
+            .map_err(invalid_data_error)?;
         log::debug!(
             "Tls has {} bytes plaintext to read, {} bytes plaintext to write",
             state.plaintext_bytes_to_read(),
@@ -249,8 +286,8 @@ impl<T: AsyncRead + Unpin> Read for SyncAdapter<'_, '_, T> {
                                 continue;
                             }
                             if tls13_header[..3] != [0x17, 0x03, 0x03] {
-                                log::error!("Tls read head type error {:?}", tls13_header);
-                                return Err(ErrorKind::InvalidData.into());
+                                log::error!("Tls read unkown head type {:?}", tls13_header);
+                                return Err(invalid_data_error("Unknon tls application header"));
                             }
                             let content_length =
                                 u16::from_be_bytes([tls13_header[3], tls13_header[4]]);
