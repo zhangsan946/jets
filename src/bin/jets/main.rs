@@ -44,6 +44,9 @@ fn main() -> std::io::Result<()> {
     routing_rule
         .domain
         .append(&mut ["geosite:cn".to_string()].to_vec());
+    config.routing.rules.push(routing_rule);
+
+    let mut routing_rule = RoutingRule::new("direct".to_string());
     routing_rule
         .ip
         .append(&mut ["geoip:cn".to_string(), "geoip:private".to_string()].to_vec());

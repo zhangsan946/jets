@@ -1,6 +1,7 @@
 use super::config::RoutingConfig;
 use super::dat::{Cidr, Domain as ProtoDomain, GeoIpList, GeoSiteList};
 use crate::common::{invalid_input_error, Address};
+use once_cell::sync::Lazy;
 use prost::Message;
 use regex::Regex;
 use std::collections::hash_map::Entry;
@@ -11,6 +12,18 @@ use std::path::PathBuf;
 use std::str::FromStr;
 
 pub const DEFAULT_OUTBOUND_TAG: &str = "some_implicit_default_outbound_tag";
+
+static GEO_IP: Lazy<GeoIpList> = Lazy::new(|| {
+    let path = PathBuf::from(std::env::var("DAT_DIR").expect("DAT_DIR"));
+    let bytes = std::fs::read(path.join("geoip.dat")).expect("geoip.dat");
+    GeoIpList::decode(bytes.as_ref()).expect("geo_ip_list")
+});
+
+static GEO_SITE: Lazy<GeoSiteList> = Lazy::new(|| {
+    let path = PathBuf::from(std::env::var("DAT_DIR").expect("DAT_DIR"));
+    let bytes = std::fs::read(path.join("geosite.dat")).expect("geosite.dat");
+    GeoSiteList::decode(bytes.as_ref()).expect("geo_site_list")
+});
 
 pub struct Router {
     domain_sites: HashMap<String, Vec<Domain>>,
@@ -46,7 +59,7 @@ impl Router {
                         code.clone()
                     };
                     if let Entry::Vacant(vacant) = domain_sites.entry(real_code.clone()) {
-                        match geo_site()
+                        match GEO_SITE
                             .entry
                             .iter()
                             .find(|item| item.country_code.to_lowercase() == real_code)
@@ -108,7 +121,7 @@ impl Router {
                 if ip.starts_with("geoip:") {
                     let code = ip.split_off(6).to_lowercase();
                     if let Entry::Vacant(vacant) = ip_sites.entry(code.clone()) {
-                        match geo_ip()
+                        match GEO_IP
                             .entry
                             .iter()
                             .find(|item| item.country_code.to_lowercase() == code)
@@ -265,24 +278,6 @@ impl Rule {
         }
         None
     }
-}
-
-fn geo_ip() -> &'static GeoIpList {
-    static LIST: std::sync::OnceLock<GeoIpList> = std::sync::OnceLock::new();
-    LIST.get_or_init(|| {
-        let path = PathBuf::from(std::env::var("DAT_DIR").expect("DAT_DIR"));
-        let bytes = std::fs::read(path.join("geoip.dat")).expect("geoip.dat");
-        GeoIpList::decode(bytes.as_ref()).expect("geo_ip_list")
-    })
-}
-
-fn geo_site() -> &'static GeoSiteList {
-    static LIST: std::sync::OnceLock<GeoSiteList> = std::sync::OnceLock::new();
-    LIST.get_or_init(|| {
-        let path = PathBuf::from(std::env::var("DAT_DIR").expect("DAT_DIR"));
-        let bytes = std::fs::read(path.join("geosite.dat")).expect("geosite.dat");
-        GeoSiteList::decode(bytes.as_ref()).expect("geo_site_list")
-    })
 }
 
 #[derive(Debug)]

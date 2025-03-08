@@ -184,7 +184,7 @@ impl VisionWriter {
                     if traffic_state.number_of_packet_to_filter > 0 {
                         xtls_filter_tls(bytes, traffic_state, "Writer");
                     }
-                    // TODO: maybe
+                    // TODO:
                     // mb = ReshapeMultiBuffer(w.ctx, bytes)
                     if traffic_state.is_tls
                         && bytes.len() >= 6

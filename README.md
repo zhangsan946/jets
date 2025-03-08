@@ -19,9 +19,8 @@ This project is still in the very early development stage. Welcome anyone intere
 
 - Routing
 	- ✅ InboundTag, Ip, Domain
-	- ❌ source, protocpl, balancerTag
-	- ✅ AsIs
-	- ❌ IPIfNonMatch & IPOnDemand
+	- ❌ source, protocol, balancerTag
+	- ✅ AsIs, ❌ IPIfNonMatch & IPOnDemand
 
 - ❌ DNS
 
