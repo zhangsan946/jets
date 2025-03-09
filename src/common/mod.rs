@@ -3,7 +3,6 @@ use serde::de::{value, Deserialize, IntoDeserializer};
 use serde::ser::Serialize;
 use shadowsocks::config::ServerType;
 use shadowsocks::context::{Context, SharedContext};
-pub use shadowsocks::net::{ConnectOpts, TcpStream};
 pub use shadowsocks::relay::Address;
 //pub use shadowsocks::relay::tcprelay::utils::copy_bidirectional;
 use std::io::{Error, ErrorKind, Result};

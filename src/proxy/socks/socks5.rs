@@ -1,9 +1,12 @@
+// https://datatracker.ietf.org/doc/html/rfc1928
+
 use super::super::{Inbound, Outbound, ProxySteam};
 use super::SocksInbound;
 use crate::app::config::SocksUser;
 use crate::app::establish_tcp_tunnel;
 use crate::app::router::Router;
-use crate::common::{invalid_data_error, Address, ConnectOpts, TcpStream, DEFAULT_CONTEXT};
+use crate::common::{invalid_data_error, Address, DEFAULT_CONTEXT};
+use crate::transport::tcp::{ConnectOpts, TcpStream};
 use async_trait::async_trait;
 use shadowsocks::relay::socks5::{
     self, Command, HandshakeRequest, HandshakeResponse, PasswdAuthRequest, PasswdAuthResponse,

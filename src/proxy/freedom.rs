@@ -1,5 +1,6 @@
 use super::{Outbound, ProxySteam};
-use crate::common::{Address, ConnectOpts, TcpStream, DEFAULT_CONTEXT};
+use crate::common::{Address, DEFAULT_CONTEXT};
+use crate::transport::tcp::{ConnectOpts, TcpStream};
 use async_trait::async_trait;
 
 #[derive(Clone, Debug, Default)]

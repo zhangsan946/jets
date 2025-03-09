@@ -1,7 +1,6 @@
+use super::tcp::{ConnectOpts, TcpStream};
 use crate::app::config::TlsSettings;
-use crate::common::{
-    invalid_data_error, invalid_input_error, Address, ConnectOpts, TcpStream, DEFAULT_CONTEXT,
-};
+use crate::common::{invalid_data_error, invalid_input_error, Address, DEFAULT_CONTEXT};
 use futures::ready;
 use once_cell::sync::Lazy;
 use rustls::{ClientConfig, ClientConnection, KeyLogFile, RootCertStore};

@@ -26,7 +26,7 @@ impl Router {
             let bytes = std::fs::read(path.join("geoip.dat")).expect("geoip.dat");
             GeoIpList::decode(bytes.as_ref()).expect("geo_ip_list")
         });
-        
+
         let geo_site_list: LazyCell<GeoSiteList> = LazyCell::new(|| {
             let path = PathBuf::from(std::env::var("DAT_DIR").expect("DAT_DIR"));
             let bytes = std::fs::read(path.join("geosite.dat")).expect("geosite.dat");
