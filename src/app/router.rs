@@ -1,9 +1,9 @@
 use super::config::RoutingConfig;
 use super::dat::{Cidr, Domain as ProtoDomain, GeoIpList, GeoSiteList};
 use crate::common::{invalid_input_error, Address};
-use once_cell::sync::Lazy;
 use prost::Message;
 use regex::Regex;
+use std::cell::LazyCell;
 use std::collections::hash_map::Entry;
 use std::collections::{HashMap, HashSet};
 use std::io::{Error, Result};
@@ -13,18 +13,6 @@ use std::str::FromStr;
 
 pub const DEFAULT_OUTBOUND_TAG: &str = "some_implicit_default_outbound_tag";
 
-static GEO_IP: Lazy<GeoIpList> = Lazy::new(|| {
-    let path = PathBuf::from(std::env::var("DAT_DIR").expect("DAT_DIR"));
-    let bytes = std::fs::read(path.join("geoip.dat")).expect("geoip.dat");
-    GeoIpList::decode(bytes.as_ref()).expect("geo_ip_list")
-});
-
-static GEO_SITE: Lazy<GeoSiteList> = Lazy::new(|| {
-    let path = PathBuf::from(std::env::var("DAT_DIR").expect("DAT_DIR"));
-    let bytes = std::fs::read(path.join("geosite.dat")).expect("geosite.dat");
-    GeoSiteList::decode(bytes.as_ref()).expect("geo_site_list")
-});
-
 pub struct Router {
     domain_sites: HashMap<String, Vec<Domain>>,
     ip_sites: HashMap<String, Vec<IpRange>>,
@@ -33,6 +21,18 @@ pub struct Router {
 
 impl Router {
     pub fn new(config: RoutingConfig) -> Result<Self> {
+        let geo_ip_list: LazyCell<GeoIpList> = LazyCell::new(|| {
+            let path = PathBuf::from(std::env::var("DAT_DIR").expect("DAT_DIR"));
+            let bytes = std::fs::read(path.join("geoip.dat")).expect("geoip.dat");
+            GeoIpList::decode(bytes.as_ref()).expect("geo_ip_list")
+        });
+        
+        let geo_site_list: LazyCell<GeoSiteList> = LazyCell::new(|| {
+            let path = PathBuf::from(std::env::var("DAT_DIR").expect("DAT_DIR"));
+            let bytes = std::fs::read(path.join("geosite.dat")).expect("geosite.dat");
+            GeoSiteList::decode(bytes.as_ref()).expect("geo_site_list")
+        });
+
         let mut domain_sites: HashMap<String, Vec<Domain>> = HashMap::new();
         let mut ip_sites: HashMap<String, Vec<IpRange>> = HashMap::new();
         let mut rules: Vec<Rule> = Vec::new();
@@ -59,7 +59,7 @@ impl Router {
                         code.clone()
                     };
                     if let Entry::Vacant(vacant) = domain_sites.entry(real_code.clone()) {
-                        match GEO_SITE
+                        match geo_site_list
                             .entry
                             .iter()
                             .find(|item| item.country_code.to_lowercase() == real_code)
@@ -121,7 +121,7 @@ impl Router {
                 if ip.starts_with("geoip:") {
                     let code = ip.split_off(6).to_lowercase();
                     if let Entry::Vacant(vacant) = ip_sites.entry(code.clone()) {
-                        match GEO_IP
+                        match geo_ip_list
                             .entry
                             .iter()
                             .find(|item| item.country_code.to_lowercase() == code)
