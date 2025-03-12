@@ -56,8 +56,8 @@ impl App {
         }
 
         // TODO:
-        // To validate the outbound tag set in the router does exist in the outbound
-        // Current behavior is to use the first outbound if route to a orphaned tag.
+        // To validate the outbound tag set in the routing rule does exist in the outbound list
+        // Current behavior is to route to the first outbound if route to a orphaned tag.
         Ok(Self {
             inbounds,
             outbounds: Arc::new(outbounds),

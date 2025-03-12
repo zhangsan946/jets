@@ -10,6 +10,7 @@ use std::io::{Error, Result};
 use std::net::{IpAddr, Ipv6Addr, SocketAddr};
 use std::path::PathBuf;
 use std::str::FromStr;
+use std::sync::RwLock;
 
 pub const DEFAULT_OUTBOUND_TAG: &str = "some_implicit_default_outbound_tag";
 
@@ -17,6 +18,7 @@ pub struct Router {
     domain_sites: HashMap<String, Vec<Domain>>,
     ip_sites: HashMap<String, Vec<IpRange>>,
     rules: Vec<Rule>,
+    cache: RwLock<HashMap<(Address, Option<String>), String>>,
 }
 
 impl Router {
@@ -187,18 +189,32 @@ impl Router {
             domain_sites,
             ip_sites,
             rules,
+            cache: RwLock::new(HashMap::new()),
         })
     }
 
     pub fn pick(&self, addr: &Address, tag: &Option<String>) -> String {
+        let key = (addr.clone(), tag.clone());
+        if let Ok(v) = self.cache.try_read() {
+            if let Some(v) = v.get(&key) {
+                log::info!("Route {} to cached tag: {}", addr, v);
+                return v.to_owned();
+            }
+        }
         for rule in self.rules.iter() {
             if let Some(outbound_tag) = rule.matches(addr, tag, &self.domain_sites, &self.ip_sites)
             {
-                log::debug!("Route {} to tag: {}", addr, outbound_tag);
+                log::info!("Route {} to tag: {}", addr, outbound_tag);
+                if let Ok(mut v) = self.cache.try_write() {
+                    v.insert(key, outbound_tag.clone());
+                }
                 return outbound_tag;
             }
         }
         log::info!("Route {} to the first outbound", addr);
+        if let Ok(mut v) = self.cache.try_write() {
+            v.insert(key, DEFAULT_OUTBOUND_TAG.to_string());
+        }
         DEFAULT_OUTBOUND_TAG.to_string()
     }
 }
