@@ -7,7 +7,7 @@ pub mod xtls;
 use super::{Outbound, ProxySteam};
 use crate::app::config::{TlsSettings, VlessFlow};
 use crate::common::Address;
-use crate::transport::tcp::ConnectOpts;
+use crate::transport::raw::ConnectOpts;
 use crate::transport::tls::Tls;
 use async_trait::async_trait;
 use bytes::BytesMut;

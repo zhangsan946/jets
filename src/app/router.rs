@@ -10,7 +10,7 @@ use std::io::{Error, Result};
 use std::net::{IpAddr, Ipv6Addr, SocketAddr};
 use std::path::PathBuf;
 use std::str::FromStr;
-use std::sync::RwLock;
+use tokio::sync::RwLock;
 
 pub const DEFAULT_OUTBOUND_TAG: &str = "some_implicit_default_outbound_tag";
 
@@ -95,8 +95,8 @@ impl Router {
                         }
                     }
                 } else if domain.starts_with("regexp:") {
-                    let regex = &domain.split_off(7);
-                    let regex = Regex::new(regex).map_err(|_| {
+                    let regex = domain.split_off(7);
+                    let regex = Regex::new(&regex).map_err(|_| {
                         invalid_input_error(format!("Invalid regex value of {}", regex))
                     })?;
                     let new_domain = Domain::new(MatchType::Regex(regex));
@@ -193,28 +193,25 @@ impl Router {
         })
     }
 
-    pub fn pick(&self, addr: &Address, tag: &Option<String>) -> String {
+    pub async fn pick(&self, addr: &Address, tag: &Option<String>) -> String {
         let key = (addr.clone(), tag.clone());
-        if let Ok(v) = self.cache.try_read() {
-            if let Some(v) = v.get(&key) {
-                log::info!("Route {} to cached tag: {}", addr, v);
-                return v.to_owned();
-            }
+        if let Some(v) = self.cache.read().await.get(&key) {
+            log::info!("Route {} to cached tag: {}", addr, v);
+            return v.to_owned();
         }
         for rule in self.rules.iter() {
             if let Some(outbound_tag) = rule.matches(addr, tag, &self.domain_sites, &self.ip_sites)
             {
                 log::info!("Route {} to tag: {}", addr, outbound_tag);
-                if let Ok(mut v) = self.cache.try_write() {
-                    v.insert(key, outbound_tag.clone());
-                }
+                self.cache.write().await.insert(key, outbound_tag.clone());
                 return outbound_tag;
             }
         }
         log::info!("Route {} to the first outbound", addr);
-        if let Ok(mut v) = self.cache.try_write() {
-            v.insert(key, DEFAULT_OUTBOUND_TAG.to_string());
-        }
+        self.cache
+            .write()
+            .await
+            .insert(key, DEFAULT_OUTBOUND_TAG.to_string());
         DEFAULT_OUTBOUND_TAG.to_string()
     }
 }
@@ -297,15 +294,15 @@ impl Rule {
 }
 
 #[derive(Debug)]
-enum MatchType {
+pub(crate) enum MatchType {
     Substr(String),
     Regex(Regex),
     SubDomain(String),
     FullDomain(String),
 }
 
-struct Domain {
-    match_type: MatchType,
+pub(crate) struct Domain {
+    pub(crate) match_type: MatchType,
     attrs: Vec<String>,
 }
 
@@ -439,8 +436,8 @@ mod test {
     use crate::common::Address;
     use std::str::FromStr;
 
-    #[test]
-    fn test_route_domain_pick() {
+    #[tokio::test]
+    async fn test_route_domain_pick() {
         let proxy_tag = "proxy";
         let direct_tag = "direct";
         let block_tag = "block";
@@ -495,87 +492,121 @@ mod test {
 
         assert_eq!(
             proxy_tag,
-            router.pick(&Address::from_str("www.facebook.com:0").unwrap(), &None)
+            router
+                .pick(&Address::from_str("www.facebook.com:0").unwrap(), &None)
+                .await
         );
         assert_eq!(
             proxy_tag,
-            router.pick(&Address::from_str("www.facebook.com.cn:0").unwrap(), &None)
+            router
+                .pick(&Address::from_str("www.facebook.com.cn:0").unwrap(), &None)
+                .await
         );
         assert_eq!(
             proxy_tag,
-            router.pick(&Address::from_str("www.google.com:0").unwrap(), &None)
+            router
+                .pick(&Address::from_str("www.google.com:0").unwrap(), &None)
+                .await
         );
         assert_eq!(
             proxy_tag,
-            router.pick(&Address::from_str("fonts.googleapis.com:0").unwrap(), &None)
+            router
+                .pick(&Address::from_str("fonts.googleapis.com:0").unwrap(), &None)
+                .await
         );
         assert_eq!(
             DEFAULT_OUTBOUND_TAG,
-            router.pick(&Address::from_str("google.com:0").unwrap(), &None)
+            router
+                .pick(&Address::from_str("google.com:0").unwrap(), &None)
+                .await
         );
         assert_eq!(
             proxy_tag,
-            router.pick(&Address::from_str("video.youtube.com:0").unwrap(), &None)
+            router
+                .pick(&Address::from_str("video.youtube.com:0").unwrap(), &None)
+                .await
         );
         assert_eq!(
             proxy_tag,
-            router.pick(&Address::from_str("youtube.com:0").unwrap(), &None)
+            router
+                .pick(&Address::from_str("youtube.com:0").unwrap(), &None)
+                .await
         );
         assert_eq!(
             proxy_tag,
-            router.pick(&Address::from_str("www.openai.com:0").unwrap(), &None)
+            router
+                .pick(&Address::from_str("www.openai.com:0").unwrap(), &None)
+                .await
         );
         assert_eq!(
             DEFAULT_OUTBOUND_TAG,
-            router.pick(&Address::from_str("openai.com:0").unwrap(), &None)
+            router
+                .pick(&Address::from_str("openai.com:0").unwrap(), &None)
+                .await
         );
 
         assert_eq!(
             direct_tag,
-            router.pick(&Address::from_str("www.baidu.com:0").unwrap(), &None)
+            router
+                .pick(&Address::from_str("www.baidu.com:0").unwrap(), &None)
+                .await
         );
         assert_eq!(
             direct_tag,
-            router.pick(&Address::from_str("baidu.com:0").unwrap(), &None)
+            router
+                .pick(&Address::from_str("baidu.com:0").unwrap(), &None)
+                .await
         );
         assert_eq!(
             direct_tag,
-            router.pick(&Address::from_str("www.sina.com:0").unwrap(), &None)
+            router
+                .pick(&Address::from_str("www.sina.com:0").unwrap(), &None)
+                .await
         );
         assert_eq!(
             DEFAULT_OUTBOUND_TAG,
-            router.pick(&Address::from_str("www.sina.com.cn:0").unwrap(), &None)
+            router
+                .pick(&Address::from_str("www.sina.com.cn:0").unwrap(), &None)
+                .await
         );
 
         assert_eq!(
             block_tag,
-            router.pick(&Address::from_str("www.ads.com:0").unwrap(), &None)
+            router
+                .pick(&Address::from_str("www.ads.com:0").unwrap(), &None)
+                .await
         );
 
         assert_eq!(
             mixed_tag,
-            router.pick(
-                &Address::from_str("www.wechat.com:0").unwrap(),
-                &Some("inbound1".to_string())
-            )
+            router
+                .pick(
+                    &Address::from_str("www.wechat.com:0").unwrap(),
+                    &Some("inbound1".to_string())
+                )
+                .await
         );
 
         assert_eq!(
             DEFAULT_OUTBOUND_TAG,
-            router.pick(
-                &Address::from_str("www.wechat.com:0").unwrap(),
-                &Some("inbound2".to_string())
-            )
+            router
+                .pick(
+                    &Address::from_str("www.wechat.com:0").unwrap(),
+                    &Some("inbound2".to_string())
+                )
+                .await
         );
 
         assert_eq!(
             DEFAULT_OUTBOUND_TAG,
-            router.pick(&Address::from_str("www.wechat.com:0").unwrap(), &None,)
+            router
+                .pick(&Address::from_str("www.wechat.com:0").unwrap(), &None,)
+                .await
         );
     }
 
-    #[test]
-    fn test_route_ip_pick() {
+    #[tokio::test]
+    async fn test_route_ip_pick() {
         let proxy_tag = "proxy";
         let direct_tag = "direct";
         let block_tag = "block";
@@ -608,43 +639,63 @@ mod test {
 
         assert_eq!(
             proxy_tag,
-            router.pick(&Address::from_str("1.32.197.100:0").unwrap(), &None)
+            router
+                .pick(&Address::from_str("1.32.197.100:0").unwrap(), &None)
+                .await
         );
         assert_eq!(
             proxy_tag,
-            router.pick(&Address::from_str("8.8.8.8:0").unwrap(), &None)
+            router
+                .pick(&Address::from_str("8.8.8.8:0").unwrap(), &None)
+                .await
         );
         assert_eq!(
             proxy_tag,
-            router.pick(&Address::from_str("[fd00::1]:0").unwrap(), &None)
+            router
+                .pick(&Address::from_str("[fd00::1]:0").unwrap(), &None)
+                .await
         );
         assert_eq!(
             proxy_tag,
-            router.pick(&Address::from_str("[fd01::1]:0").unwrap(), &None)
+            router
+                .pick(&Address::from_str("[fd01::1]:0").unwrap(), &None)
+                .await
         );
         assert_eq!(
             DEFAULT_OUTBOUND_TAG,
-            router.pick(&Address::from_str("1.32.166.1:0").unwrap(), &None)
+            router
+                .pick(&Address::from_str("1.32.166.1:0").unwrap(), &None)
+                .await
         );
         assert_eq!(
             DEFAULT_OUTBOUND_TAG,
-            router.pick(&Address::from_str("[fd02::1]:0").unwrap(), &None)
+            router
+                .pick(&Address::from_str("[fd02::1]:0").unwrap(), &None)
+                .await
         );
         assert_eq!(
             direct_tag,
-            router.pick(&Address::from_str("5.10.143.100:0").unwrap(), &None)
+            router
+                .pick(&Address::from_str("5.10.143.100:0").unwrap(), &None)
+                .await
         );
         assert_eq!(
             direct_tag,
-            router.pick(&Address::from_str("5.10.143.100:0").unwrap(), &None)
+            router
+                .pick(&Address::from_str("5.10.143.100:0").unwrap(), &None)
+                .await
         );
         assert_eq!(
             direct_tag,
-            router.pick(&Address::from_str("114.114.114.114:0").unwrap(), &None)
+            router
+                .pick(&Address::from_str("114.114.114.114:0").unwrap(), &None)
+                .await
         );
         assert_eq!(
             block_tag,
-            router.pick(&Address::from_str("192.168.16.16:0").unwrap(), &None)
+            router
+                .pick(&Address::from_str("192.168.16.16:0").unwrap(), &None)
+                .await
         );
     }
 }

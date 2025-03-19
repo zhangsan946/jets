@@ -2,23 +2,27 @@ pub mod config;
 pub mod dat {
     include!(concat!(env!("OUT_DIR"), "/xray.app.router.rs"));
 }
+pub mod dns;
 pub mod router;
 
 use crate::common::{copy_bidirectional, invalid_input_error, Address};
 use crate::proxy::{Inbound, Outbound, ProxySteam};
 use actix_server::Server;
 use actix_service::fn_service;
+//use dns::DnsManager;
 pub use config::Config;
 use router::{Router, DEFAULT_OUTBOUND_TAG};
 use std::collections::{HashMap, HashSet};
 use std::io::{Error, ErrorKind, Result};
 use std::sync::Arc;
+use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::net::TcpStream;
 
 pub struct App {
     inbounds: Vec<(Option<String>, Box<dyn Inbound>)>,
     outbounds: Arc<HashMap<String, Arc<Box<dyn Outbound>>>>,
     router: Arc<Router>,
+    //dns: DnsManager,
 }
 
 impl App {
@@ -55,13 +59,18 @@ impl App {
             }
         }
 
+        let outbounds = Arc::new(outbounds);
+        let router = Arc::new(Router::new(config.routing)?);
+        //let dns = DnsManager::new(config.dns, outbounds.clone(), router.clone())?;
+
         // TODO:
         // To validate the outbound tag set in the routing rule does exist in the outbound list
         // Current behavior is to route to the first outbound if route to a orphaned tag.
         Ok(Self {
             inbounds,
-            outbounds: Arc::new(outbounds),
-            router: Arc::new(Router::new(config.routing)?),
+            outbounds,
+            router,
+            //dns,
         })
     }
 
@@ -110,15 +119,18 @@ impl App {
     }
 }
 
-pub(crate) async fn establish_tcp_tunnel(
-    mut stream: Box<dyn ProxySteam>,
+pub(crate) async fn establish_tcp_tunnel<S>(
+    stream: &mut S,
     address: &Address,
     inbound_tag: &Option<String>,
     outbounds: Arc<HashMap<String, Arc<Box<dyn Outbound>>>>,
     router: Arc<Router>,
-) -> Result<()> {
+) -> Result<()>
+where
+    S: AsyncRead + AsyncWrite + Unpin + ?Sized,
+{
     let mut down_stream = connect_host(address, inbound_tag, outbounds, router).await?;
-    return copy_bidirectional(&mut stream, &mut down_stream)
+    return copy_bidirectional(stream, &mut down_stream)
         .await
         .map(|_| ());
 }
@@ -129,7 +141,7 @@ pub(crate) async fn connect_host(
     outbounds: Arc<HashMap<String, Arc<Box<dyn Outbound>>>>,
     router: Arc<Router>,
 ) -> Result<Box<dyn ProxySteam>> {
-    let outbound_tag = router.pick(address, inbound_tag);
+    let outbound_tag = router.pick(address, inbound_tag).await;
     let outbound = outbounds.get(&outbound_tag).unwrap_or_else(|| {
         log::warn!("Routing to outbound with tag {} not found", outbound_tag);
         log::warn!("Using default outbound");

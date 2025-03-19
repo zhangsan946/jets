@@ -1,6 +1,6 @@
 // https://github.com/shadowsocks/shadowsocks-rust/blob/8865992ac52a9a866021f0fd9744cc411baac58d/crates/shadowsocks-service/src/local/http/http_service.rs
 
-use super::super::{Outbound, ProxySteam};
+use super::super::Outbound;
 use super::{
     http_client::HttpClient,
     utils::{authority_addr, check_keep_alive, host_addr},
@@ -92,12 +92,16 @@ impl HttpService {
                             host
                         );
 
-                        let upgraded_io = TokioIo::new(upgraded);
+                        let mut upgraded_io = TokioIo::new(upgraded);
 
-                        let stream: Box<dyn ProxySteam> = Box::new(upgraded_io);
-                        let _ =
-                            establish_tcp_tunnel(stream, &host, &inbound_tag, outbounds, router)
-                                .await;
+                        let _ = establish_tcp_tunnel(
+                            &mut upgraded_io,
+                            &host,
+                            &inbound_tag,
+                            outbounds,
+                            router,
+                        )
+                        .await;
                     }
                     Err(err) => {
                         error!("failed to upgrade CONNECT request, error: {}", err);

@@ -1,4 +1,4 @@
-use super::tcp::{ConnectOpts, TcpStream};
+use super::raw::{ConnectOpts, TcpStream};
 use crate::app::config::TlsSettings;
 use crate::common::{invalid_data_error, invalid_input_error, Address, DEFAULT_CONTEXT};
 use futures::ready;

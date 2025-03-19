@@ -6,7 +6,7 @@ use crate::app::config::SocksUser;
 use crate::app::establish_tcp_tunnel;
 use crate::app::router::Router;
 use crate::common::{invalid_data_error, Address, DEFAULT_CONTEXT};
-use crate::transport::tcp::{ConnectOpts, TcpStream};
+use crate::transport::raw::{ConnectOpts, TcpStream};
 use async_trait::async_trait;
 use shadowsocks::relay::socks5::{
     self, Command, HandshakeRequest, HandshakeResponse, PasswdAuthRequest, PasswdAuthResponse,
@@ -127,8 +127,7 @@ impl Inbound for Socks5Inbound {
                 return Err(invalid_data_error("Socks5 tcp bind is not supported"));
             }
         }
-        let stream: Box<dyn ProxySteam> = Box::new(stream);
-        establish_tcp_tunnel(stream, &address, &inbound_tag, outbounds, router).await
+        establish_tcp_tunnel(&mut stream, &address, &inbound_tag, outbounds, router).await
     }
 }
 

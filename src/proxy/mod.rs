@@ -33,10 +33,10 @@ impl<T: 'static> AsAny for T {
     }
 }
 
-pub trait ProxySteam: AsyncRead + AsyncWrite + Unpin + Send + AsAny {
+pub trait ProxySteam: AsyncRead + AsyncWrite + Unpin + Send + Sync + AsAny {
     fn poll_read_exact(&mut self, cx: &mut Context<'_>, buf: &mut [u8]) -> Poll<Result<usize>>;
 }
-impl<T: AsyncRead + AsyncWrite + Unpin + Send + AsAny> ProxySteam for T {
+impl<T: AsyncRead + AsyncWrite + Unpin + Send + Sync + AsAny> ProxySteam for T {
     fn poll_read_exact(&mut self, cx: &mut Context<'_>, buf: &mut [u8]) -> Poll<Result<usize>> {
         let size = buf.len();
         if size == 0 {

@@ -1381,6 +1381,7 @@ dependencies = [
  "bytes",
  "env_logger",
  "futures",
+ "hickory-resolver",
  "http-body-util",
  "hyper",
  "hyper-util",
