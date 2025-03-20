@@ -4,6 +4,7 @@ use super::super::{Inbound, Outbound, ProxySteam};
 use super::SocksInbound;
 use crate::app::config::SocksUser;
 use crate::app::establish_tcp_tunnel;
+use crate::app::proxy::Outbounds;
 use crate::app::router::Router;
 use crate::common::{invalid_data_error, Address, DEFAULT_CONTEXT};
 use crate::transport::raw::{ConnectOpts, TcpStream};
@@ -53,7 +54,7 @@ impl Inbound for Socks5Inbound {
         &self,
         mut stream: TokioTcpStream,
         inbound_tag: Option<String>,
-        outbounds: Arc<HashMap<String, Arc<Box<dyn Outbound>>>>,
+        outbounds: Arc<Outbounds>,
         router: Arc<Router>,
     ) -> Result<()> {
         // 1. Handshake

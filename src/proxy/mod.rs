@@ -6,12 +6,12 @@ pub mod shadowsocks;
 pub mod socks;
 pub mod vless;
 
+use crate::app::proxy::Outbounds;
 use crate::app::router::Router;
 use crate::common::Address;
 use async_trait::async_trait;
 use bytes::BufMut;
 use futures::ready;
-use std::collections::HashMap;
 use std::io::{ErrorKind, Result};
 use std::pin::Pin;
 use std::sync::Arc;
@@ -81,7 +81,7 @@ pub trait Inbound: Sync + Send {
         &self,
         stream: TcpStream,
         inbound_tag: Option<String>,
-        outbounds: Arc<HashMap<String, Arc<Box<dyn Outbound>>>>,
+        outbounds: Arc<Outbounds>,
         router: Arc<Router>,
     ) -> Result<()>;
 }

@@ -2,8 +2,9 @@ use super::config::{DnsConfig, QueryStrategy};
 use super::dat::GeoSiteList;
 use super::router::{Domain, MatchType, Router};
 use crate::app::connect_host;
+use crate::app::proxy::Outbounds;
 use crate::common::{invalid_input_error, Address};
-use crate::proxy::{Outbound, ProxySteam};
+use crate::proxy::ProxySteam;
 use crate::transport::raw::UdpSocket;
 use hickory_resolver::config::{LookupIpStrategy, NameServerConfig, ResolverConfig, ResolverOpts};
 use hickory_resolver::name_server::GenericConnector;
@@ -34,11 +35,7 @@ pub struct DnsManager {
 }
 
 impl DnsManager {
-    pub fn new(
-        config: DnsConfig,
-        outbounds: Arc<HashMap<String, Arc<Box<dyn Outbound>>>>,
-        router: Arc<Router>,
-    ) -> Result<Self> {
+    pub fn new(config: DnsConfig, outbounds: Arc<Outbounds>, router: Arc<Router>) -> Result<Self> {
         let mut cache: HashMap<String, (Instant, Vec<IpAddr>)> = HashMap::new();
         let mut hosts: Vec<(Domain, Vec<IpAddr>)> = Vec::new();
         for host in config.hosts {
@@ -271,17 +268,13 @@ fn parse_domain(mut domain: String) -> Result<Vec<Domain>> {
 #[derive(Clone)]
 struct DnsRuntimeProvider {
     handle: TokioHandle,
-    outbounds: Arc<HashMap<String, Arc<Box<dyn Outbound>>>>,
+    outbounds: Arc<Outbounds>,
     router: Arc<Router>,
     routable: bool,
 }
 
 impl DnsRuntimeProvider {
-    pub fn new(
-        outbounds: Arc<HashMap<String, Arc<Box<dyn Outbound>>>>,
-        router: Arc<Router>,
-        routable: bool,
-    ) -> Self {
+    pub fn new(outbounds: Arc<Outbounds>, router: Arc<Router>, routable: bool) -> Self {
         Self {
             handle: TokioHandle::default(),
             outbounds,
@@ -348,7 +341,7 @@ type DnsResolver = Resolver<DnsConnectionProvider>;
 fn create_resolver(
     config: ResolverConfig,
     options: ResolverOpts,
-    outbounds: Arc<HashMap<String, Arc<Box<dyn Outbound>>>>,
+    outbounds: Arc<Outbounds>,
     router: Arc<Router>,
     routable: bool,
 ) -> DnsResolver {

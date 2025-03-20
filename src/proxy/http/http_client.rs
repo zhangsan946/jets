@@ -1,11 +1,12 @@
 // https://github.com/shadowsocks/shadowsocks-rust/blob/8865992ac52a9a866021f0fd9744cc411baac58d/crates/shadowsocks-service/src/local/http/http_client.rs#L1
 
-use super::super::{Outbound, ProxySteam};
+use super::super::ProxySteam;
 use super::{
     http_stream::ProxyHttpStream,
     utils::{check_keep_alive, host_addr},
 };
 use crate::app::connect_host;
+use crate::app::proxy::Outbounds;
 use crate::app::router::Router;
 use crate::common::{invalid_data_error, invalid_input_error, Address};
 use hyper::http::{HeaderValue, Method as HttpMethod, Uri, Version as HttpVersion};
@@ -22,7 +23,7 @@ use lru_time_cache::LruCache;
 use pin_project::pin_project;
 use std::{
     borrow::Cow,
-    collections::{HashMap, VecDeque},
+    collections::VecDeque,
     fmt::Debug,
     future::Future,
     io::{Error, ErrorKind, Result},
@@ -125,7 +126,7 @@ where
         &self,
         req: Request<B>,
         inbound_tag: Option<String>,
-        outbounds: Arc<HashMap<String, Arc<Box<dyn Outbound>>>>,
+        outbounds: Arc<Outbounds>,
         router: Arc<Router>,
     ) -> Result<Response<Incoming>> {
         let host = match host_addr(req.uri()) {
@@ -258,7 +259,7 @@ where
         host: Address,
         domain: &str,
         inbound_tag: &Option<String>,
-        outbounds: Arc<HashMap<String, Arc<Box<dyn Outbound>>>>,
+        outbounds: Arc<Outbounds>,
         router: Arc<Router>,
     ) -> Result<HttpConnection<B>> {
         if *scheme != Scheme::HTTP && *scheme != Scheme::HTTPS {

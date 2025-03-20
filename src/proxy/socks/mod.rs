@@ -1,7 +1,8 @@
 pub mod socks5;
 
-use super::{Inbound, Outbound};
+use super::Inbound;
 use crate::app::config::Account;
+use crate::app::proxy::Outbounds;
 use crate::app::router::Router;
 use crate::common::{invalid_data_error, Address};
 use async_trait::async_trait;
@@ -39,7 +40,7 @@ impl Inbound for SocksInbound {
         &self,
         stream: TcpStream,
         inbound_tag: Option<String>,
-        outbounds: Arc<HashMap<String, Arc<Box<dyn Outbound>>>>,
+        outbounds: Arc<Outbounds>,
         router: Arc<Router>,
     ) -> Result<()> {
         let mut version_buffer = [0u8; 1];
