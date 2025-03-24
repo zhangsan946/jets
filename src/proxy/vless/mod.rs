@@ -5,8 +5,11 @@ pub mod stream;
 pub mod xtls;
 
 use super::{Outbound, ProxySteam};
-use crate::app::config::{TlsSettings, VlessFlow};
-use crate::common::{Address, ConnectOpts};
+use crate::app::config::{OutboundProtocolOption, TlsSettings, VlessFlow};
+use crate::app::dns::DnsManager;
+use crate::common::Address;
+use crate::pre_check_addr;
+use crate::transport::raw::ConnectOpts;
 use crate::transport::tls::Tls;
 use async_trait::async_trait;
 use bytes::BytesMut;
@@ -31,22 +34,28 @@ impl VlessOutbound {
         flow: VlessFlow,
         tls_settings: TlsSettings,
     ) -> Result<Self> {
+        let tls = Tls::new(tls_settings, &addr)?;
         Ok(Self {
             addr,
             id,
             flow,
             connect_opts: ConnectOpts::default(),
-            tls: Tls::new(tls_settings)?,
+            tls,
         })
     }
 }
 
 #[async_trait]
 impl Outbound for VlessOutbound {
-    async fn handle(&self, addr: &Address) -> std::io::Result<Box<dyn ProxySteam>> {
+    async fn handle(&self, addr: &Address) -> Result<Box<dyn ProxySteam>> {
+        let server_addr = pre_check_addr!(self.addr);
         let mut stream = self
             .tls
-            .connect(&self.addr, &self.connect_opts, self.flow != VlessFlow::None)
+            .connect(
+                server_addr,
+                &self.connect_opts,
+                self.flow != VlessFlow::None,
+            )
             .await?;
 
         let stream_id = std::time::SystemTime::now()
@@ -71,5 +80,20 @@ impl Outbound for VlessOutbound {
             self.flow,
             stream_id,
         )))
+    }
+
+    fn protocol(&self) -> OutboundProtocolOption {
+        OutboundProtocolOption::Vless
+    }
+
+    async fn pre_connect(&self, dns: &DnsManager) -> Result<Option<Box<dyn Outbound>>> {
+        if matches!(self.addr, Address::DomainNameAddress(_, _)) {
+            let addr = dns.resolve(&self.addr).await?;
+            let mut outbound = self.clone();
+            outbound.addr = Address::SocketAddress(addr);
+            Ok(Some(Box::new(outbound) as Box<dyn Outbound>))
+        } else {
+            Ok(None)
+        }
     }
 }

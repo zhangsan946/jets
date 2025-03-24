@@ -1,9 +1,15 @@
+// https://datatracker.ietf.org/doc/html/rfc1928
+
 use super::super::{Inbound, Outbound, ProxySteam};
 use super::SocksInbound;
-use crate::app::config::SocksUser;
+use crate::app::config::{OutboundProtocolOption, SocksUser};
+use crate::app::dns::DnsManager;
 use crate::app::establish_tcp_tunnel;
+use crate::app::proxy::Outbounds;
 use crate::app::router::Router;
-use crate::common::{invalid_data_error, Address, ConnectOpts, TcpStream, DEFAULT_CONTEXT};
+use crate::common::{invalid_data_error, Address};
+use crate::pre_check_addr;
+use crate::transport::raw::{ConnectOpts, TcpStream};
 use async_trait::async_trait;
 use shadowsocks::relay::socks5::{
     self, Command, HandshakeRequest, HandshakeResponse, PasswdAuthRequest, PasswdAuthResponse,
@@ -50,8 +56,9 @@ impl Inbound for Socks5Inbound {
         &self,
         mut stream: TokioTcpStream,
         inbound_tag: Option<String>,
-        outbounds: Arc<HashMap<String, Arc<Box<dyn Outbound>>>>,
+        outbounds: Arc<Outbounds>,
         router: Arc<Router>,
+        dns: Arc<DnsManager>,
     ) -> Result<()> {
         // 1. Handshake
         let request = match HandshakeRequest::read_from(&mut stream).await {
@@ -124,8 +131,8 @@ impl Inbound for Socks5Inbound {
                 return Err(invalid_data_error("Socks5 tcp bind is not supported"));
             }
         }
-        let stream: Box<dyn ProxySteam> = Box::new(stream);
-        establish_tcp_tunnel(stream, &address, &inbound_tag, outbounds, router).await
+        let mut stream = Box::new(stream);
+        establish_tcp_tunnel(&mut stream, &address, &inbound_tag, outbounds, router, dns).await
     }
 }
 
@@ -149,9 +156,8 @@ impl Socks5Outbound {
 #[async_trait]
 impl Outbound for Socks5Outbound {
     async fn handle(&self, addr: &Address) -> Result<Box<dyn ProxySteam>> {
-        let mut stream =
-            TcpStream::connect_remote_with_opts(&DEFAULT_CONTEXT, &self.addr, &self.connect_opts)
-                .await?;
+        let server_addr = pre_check_addr!(self.addr);
+        let mut stream = TcpStream::connect_with_opts(server_addr, &self.connect_opts).await?;
 
         let mut auth_method = socks5::SOCKS5_AUTH_METHOD_NONE;
         if !self.accounts.is_empty() {
@@ -184,6 +190,21 @@ impl Outbound for Socks5Outbound {
                 "Sock server reply error: {}",
                 reply
             ))),
+        }
+    }
+
+    fn protocol(&self) -> OutboundProtocolOption {
+        OutboundProtocolOption::Socks
+    }
+
+    async fn pre_connect(&self, dns: &DnsManager) -> Result<Option<Box<dyn Outbound>>> {
+        if matches!(self.addr, Address::DomainNameAddress(_, _)) {
+            let addr = dns.resolve(&self.addr).await?;
+            let mut outbound = self.clone();
+            outbound.addr = Address::SocketAddress(addr);
+            Ok(Some(Box::new(outbound) as Box<dyn Outbound>))
+        } else {
+            Ok(None)
         }
     }
 }

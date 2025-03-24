@@ -1,6 +1,10 @@
 use super::{Outbound, ProxySteam};
-use crate::common::{Address, ConnectOpts, TcpStream, DEFAULT_CONTEXT};
+use crate::app::config::OutboundProtocolOption;
+use crate::app::dns::DnsManager;
+use crate::common::Address;
+use crate::transport::raw::{ConnectOpts, TcpStream};
 use async_trait::async_trait;
+use std::io::Result;
 
 #[derive(Clone, Debug, Default)]
 pub struct FreedomOutbound {
@@ -9,10 +13,20 @@ pub struct FreedomOutbound {
 
 #[async_trait]
 impl Outbound for FreedomOutbound {
-    async fn handle(&self, addr: &Address) -> std::io::Result<Box<dyn ProxySteam>> {
-        let stream =
-            TcpStream::connect_remote_with_opts(&DEFAULT_CONTEXT, addr, &self.connect_opts).await?;
-        let stream: Box<dyn ProxySteam> = Box::new(stream);
-        Ok(stream)
+    async fn handle(&self, addr: &Address) -> Result<Box<dyn ProxySteam>> {
+        if let Address::SocketAddress(addr) = addr {
+            let stream = TcpStream::connect_with_opts(addr, &self.connect_opts).await?;
+            Ok(Box::new(stream) as Box<dyn ProxySteam>)
+        } else {
+            unreachable!()
+        }
+    }
+
+    fn protocol(&self) -> OutboundProtocolOption {
+        OutboundProtocolOption::Freedom
+    }
+
+    async fn pre_connect(&self, _dns: &DnsManager) -> Result<Option<Box<dyn Outbound>>> {
+        Ok(None)
     }
 }

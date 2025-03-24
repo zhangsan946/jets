@@ -3,8 +3,10 @@ mod http_service;
 mod http_stream;
 mod utils;
 
-use super::{Inbound, Outbound};
+use super::Inbound;
 use crate::app::config::Account;
+use crate::app::dns::DnsManager;
+use crate::app::proxy::Outbounds;
 use crate::app::router::Router;
 use crate::common::Address;
 use async_trait::async_trait;
@@ -44,8 +46,9 @@ impl Inbound for HttpInbound {
         &self,
         stream: TcpStream,
         inbound_tag: Option<String>,
-        outbounds: Arc<HashMap<String, Arc<Box<dyn Outbound>>>>,
+        outbounds: Arc<Outbounds>,
         router: Arc<Router>,
+        dns: Arc<DnsManager>,
     ) -> Result<()> {
         let peer_addr = stream.peer_addr()?;
         let io = TokioIo::new(stream);
@@ -62,6 +65,7 @@ impl Inbound for HttpInbound {
                         inbound_tag.clone(),
                         outbounds.clone(),
                         router.clone(),
+                        dns.clone(),
                     )
                 }),
             )

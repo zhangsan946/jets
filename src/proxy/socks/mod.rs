@@ -1,7 +1,9 @@
 pub mod socks5;
 
-use super::{Inbound, Outbound};
+use super::Inbound;
 use crate::app::config::Account;
+use crate::app::dns::DnsManager;
+use crate::app::proxy::Outbounds;
 use crate::app::router::Router;
 use crate::common::{invalid_data_error, Address};
 use async_trait::async_trait;
@@ -39,8 +41,9 @@ impl Inbound for SocksInbound {
         &self,
         stream: TcpStream,
         inbound_tag: Option<String>,
-        outbounds: Arc<HashMap<String, Arc<Box<dyn Outbound>>>>,
+        outbounds: Arc<Outbounds>,
         router: Arc<Router>,
+        dns: Arc<DnsManager>,
     ) -> Result<()> {
         let mut version_buffer = [0u8; 1];
         let n = stream.peek(&mut version_buffer).await?;
@@ -55,7 +58,7 @@ impl Inbound for SocksInbound {
             0x05 => {
                 let socks5_inbound = Socks5Inbound::from(self.clone());
                 socks5_inbound
-                    .handle(stream, inbound_tag, outbounds, router)
+                    .handle(stream, inbound_tag, outbounds, router, dns)
                     .await
             }
             b'G' | b'g' | b'H' | b'h' | b'P' | b'p' | b'D' | b'd' | b'C' | b'c' | b'O' | b'o'

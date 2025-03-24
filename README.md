@@ -22,12 +22,16 @@ This project is still in the very early development stage. Welcome anyone intere
 	- ❌ source, protocol, balancerTag
 	- ✅ AsIs, ❌ IPIfNonMatch & IPOnDemand
 
-- ❌ DNS
+- DNS
+	- ✅ DNS over TCP
+	- ❌ UDP
+	- ❌ doh/doq/dot
 
 - Other
 	- ❌ Connection timeout & options
 	- ❌ socks & http auth
 	- ❌ UDP
+	- ❌ fakedns
 	- ❌ more protocols & configurations
 
 ## Development

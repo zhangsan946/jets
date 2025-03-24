@@ -2,6 +2,7 @@ use crate::impl_display;
 use serde::de::{Deserializer, Error};
 use serde::{Deserialize, Serialize};
 pub use shadowsocks_crypto::kind::CipherKind;
+use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
 use std::str::FromStr;
@@ -14,6 +15,7 @@ pub struct Config {
     pub inbounds: Vec<InboundConfig>,
     pub outbounds: Vec<OutboundConfig>,
     pub routing: RoutingConfig,
+    pub dns: DnsConfig,
 }
 
 impl Config {
@@ -443,6 +445,102 @@ impl Default for RoutingConfig {
             rules: Vec::new(),
         }
     }
+}
+
+fn default_dns_port() -> u16 {
+    53
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DnsServer {
+    pub address: String,
+    #[serde(default = "default_dns_port")]
+    pub port: u16,
+    #[serde(default)]
+    pub domains: Vec<String>,
+}
+
+impl DnsServer {
+    pub fn new(address: String) -> Self {
+        Self {
+            address,
+            port: default_dns_port(),
+            domains: Vec::new(),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "PascalCase")]
+pub enum QueryStrategy {
+    #[default]
+    UseIP,
+    UseIPv4,
+    UseIPv6,
+}
+
+fn deserialize_hosts_from_one_or_many_string<'de, D>(
+    deserializer: D,
+) -> Result<HashMap<String, Vec<String>>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum OneOrManyString {
+        One(String),
+        Many(Vec<String>),
+    }
+
+    let hosts = HashMap::<String, OneOrManyString>::deserialize(deserializer)?;
+    Ok(hosts
+        .into_iter()
+        .map(|(k, v)| {
+            (
+                k,
+                match v {
+                    OneOrManyString::One(s) => vec![s],
+                    OneOrManyString::Many(s) => s,
+                },
+            )
+        })
+        .collect())
+}
+
+fn deserialize_servers_from_struct_or_string<'de, D>(
+    deserializer: D,
+) -> Result<Vec<DnsServer>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum DeEither {
+        DnsServer(DnsServer),
+        String(String),
+    }
+
+    let servers = Vec::<DeEither>::deserialize(deserializer)?;
+    Ok(servers
+        .into_iter()
+        .map(|server| match server {
+            DeEither::DnsServer(s) => s,
+            DeEither::String(s) => DnsServer::new(s),
+        })
+        .collect())
+}
+
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct DnsConfig {
+    #[serde(deserialize_with = "deserialize_hosts_from_one_or_many_string")]
+    pub hosts: HashMap<String, Vec<String>>,
+    #[serde(deserialize_with = "deserialize_servers_from_struct_or_string")]
+    pub servers: Vec<DnsServer>,
+    pub query_strategy: QueryStrategy,
+    pub local_outbound_tag: Option<String>,
+    pub tag: Option<String>,
 }
 
 #[cfg(test)]

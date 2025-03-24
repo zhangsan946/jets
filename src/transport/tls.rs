@@ -1,7 +1,6 @@
+use super::raw::{ConnectOpts, TcpStream};
 use crate::app::config::TlsSettings;
-use crate::common::{
-    invalid_data_error, invalid_input_error, Address, ConnectOpts, TcpStream, DEFAULT_CONTEXT,
-};
+use crate::common::{invalid_data_error, invalid_input_error, Address};
 use futures::ready;
 use once_cell::sync::Lazy;
 use rustls::{ClientConfig, ClientConnection, KeyLogFile, RootCertStore};
@@ -9,6 +8,7 @@ use rustls::{ClientConfig, ClientConnection, KeyLogFile, RootCertStore};
 use rustls_pki_types::ServerName;
 use std::future::poll_fn;
 use std::io::{BufRead, Error, ErrorKind, Read, Result, Write};
+use std::net::SocketAddr;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
@@ -37,12 +37,12 @@ pub static ROOT_CERT_STORE: Lazy<Arc<RootCertStore>> = Lazy::new(|| {
 
 #[derive(Clone, Debug)]
 pub struct Tls {
-    server_name: Option<ServerName<'static>>,
+    server_name: ServerName<'static>,
     tls_config: Arc<ClientConfig>,
 }
 
 impl Tls {
-    pub fn new(tls_settings: TlsSettings) -> Result<Self> {
+    pub fn new(tls_settings: TlsSettings, addr: &Address) -> Result<Self> {
         let mut tls_config = ClientConfig::builder()
             .with_root_certificates(ROOT_CERT_STORE.clone())
             .with_no_client_auth();
@@ -50,14 +50,16 @@ impl Tls {
         tls_config.key_log = Arc::new(KeyLogFile::new());
         //tls_config.max_fragment_size = Some(crate::common::DEFAULT_BUF_SIZE);
         let server_name = if let Some(server_name) = tls_settings.server_name {
-            Some(ServerName::try_from(server_name.clone()).map_err(|_| {
+            ServerName::try_from(server_name.clone()).map_err(|_| {
                 invalid_input_error(format!(
                     "Invalid server name of {} in tls settings",
                     server_name
                 ))
-            })?)
+            })?
         } else {
-            None
+            ServerName::try_from(addr.host()).map_err(|_| {
+                invalid_data_error(format!("Got invalid server name: {}", addr.host()))
+            })?
         };
         Ok(Self {
             server_name,
@@ -69,24 +71,18 @@ impl Tls {
 impl Tls {
     pub async fn connect(
         &self,
-        addr: &Address,
+        addr: &SocketAddr,
         connect_opts: &ConnectOpts,
         xtls: bool,
     ) -> Result<TlsStream> {
-        let conn =
-            TcpStream::connect_remote_with_opts(&DEFAULT_CONTEXT, addr, connect_opts).await?;
-        let dnsname = if let Some(server_name) = &self.server_name {
-            server_name.clone()
-        } else {
-            ServerName::try_from(addr.host())
-                .map_err(|_| invalid_data_error(format!("Got invalid dns name: {}", addr.host())))?
-        };
-        let session = ClientConnection::new(self.tls_config.clone(), dnsname).map_err(|e| {
-            Error::new(
-                ErrorKind::Other,
-                format!("Unable to create tls session: {}", e),
-            )
-        })?;
+        let conn = TcpStream::connect_with_opts(addr, connect_opts).await?;
+        let session = ClientConnection::new(self.tls_config.clone(), self.server_name.clone())
+            .map_err(|e| {
+                Error::new(
+                    ErrorKind::Other,
+                    format!("Unable to create tls session: {}", e),
+                )
+            })?;
         let mut tls_stream = TlsStream::new(conn, session, xtls);
         poll_fn(|cx| tls_stream.handshake(cx)).await?;
         Ok(tls_stream)

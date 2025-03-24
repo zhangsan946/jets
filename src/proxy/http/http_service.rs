@@ -1,11 +1,12 @@
 // https://github.com/shadowsocks/shadowsocks-rust/blob/8865992ac52a9a866021f0fd9744cc411baac58d/crates/shadowsocks-service/src/local/http/http_service.rs
 
-use super::super::{Outbound, ProxySteam};
 use super::{
     http_client::HttpClient,
     utils::{authority_addr, check_keep_alive, host_addr},
 };
+use crate::app::dns::DnsManager;
 use crate::app::establish_tcp_tunnel;
+use crate::app::proxy::Outbounds;
 use crate::app::router::Router;
 use crate::common::Address;
 use bytes::Bytes;
@@ -38,8 +39,9 @@ impl HttpService {
         mut req: Request<Incoming>,
         accounts: &HashMap<String, String>,
         inbound_tag: Option<String>,
-        outbounds: Arc<HashMap<String, Arc<Box<dyn Outbound>>>>,
+        outbounds: Arc<Outbounds>,
         router: Arc<Router>,
+        dns: Arc<DnsManager>,
     ) -> hyper::Result<Response<BoxBody<Bytes, hyper::Error>>> {
         trace!("request {} {:?}", self.peer_addr, req);
 
@@ -93,11 +95,16 @@ impl HttpService {
                         );
 
                         let upgraded_io = TokioIo::new(upgraded);
-
-                        let stream: Box<dyn ProxySteam> = Box::new(upgraded_io);
-                        let _ =
-                            establish_tcp_tunnel(stream, &host, &inbound_tag, outbounds, router)
-                                .await;
+                        let mut stream = Box::new(upgraded_io);
+                        let _ = establish_tcp_tunnel(
+                            &mut stream,
+                            &host,
+                            &inbound_tag,
+                            outbounds,
+                            router,
+                            dns,
+                        )
+                        .await;
                     }
                     Err(err) => {
                         error!("failed to upgrade CONNECT request, error: {}", err);
@@ -125,7 +132,7 @@ impl HttpService {
 
         let mut res = match self
             .http_client
-            .send_request(req, inbound_tag, outbounds, router)
+            .send_request(req, inbound_tag, outbounds, router, dns)
             .await
         {
             Ok(resp) => resp,

@@ -1,18 +1,11 @@
-use once_cell::sync::Lazy;
 use serde::de::{value, Deserialize, IntoDeserializer};
 use serde::ser::Serialize;
-use shadowsocks::config::ServerType;
-use shadowsocks::context::{Context, SharedContext};
-pub use shadowsocks::net::{ConnectOpts, TcpStream};
 pub use shadowsocks::relay::Address;
 //pub use shadowsocks::relay::tcprelay::utils::copy_bidirectional;
 use std::io::{Error, ErrorKind, Result};
 use tokio::io::{copy_bidirectional_with_sizes, AsyncRead, AsyncWrite};
 
 pub const DEFAULT_BUF_SIZE: usize = 8 * 1024;
-
-pub static DEFAULT_CONTEXT: Lazy<SharedContext> =
-    Lazy::new(|| Context::new_shared(ServerType::Local));
 
 pub fn invalid_input_error<T: ToString>(message: T) -> Error {
     Error::new(ErrorKind::InvalidInput, message.to_string())
@@ -75,6 +68,21 @@ macro_rules! impl_display {
             fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
                 self.serialize(f)
             }
+        }
+    };
+}
+
+#[macro_export]
+macro_rules! pre_check_addr {
+    ($addr:expr) => {
+        match $addr {
+            Address::DomainNameAddress(ref addr, _) => {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::Interrupted,
+                    format!("{} is not resolvable yet", addr),
+                ));
+            }
+            Address::SocketAddress(ref addr) => addr,
         }
     };
 }

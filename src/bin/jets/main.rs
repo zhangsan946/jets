@@ -1,4 +1,4 @@
-use jets::app::config::{InboundConfig, OutboundConfig, RoutingRule, VlessFlow};
+use jets::app::config::{DnsServer, InboundConfig, OutboundConfig, RoutingRule, VlessFlow};
 use jets::app::{App, Config};
 
 fn main() -> std::io::Result<()> {
@@ -45,12 +45,19 @@ fn main() -> std::io::Result<()> {
         .domain
         .append(&mut ["geosite:cn".to_string()].to_vec());
     config.routing.rules.push(routing_rule);
-
     let mut routing_rule = RoutingRule::new("direct".to_string());
     routing_rule
         .ip
         .append(&mut ["geoip:cn".to_string(), "geoip:private".to_string()].to_vec());
     config.routing.rules.push(routing_rule);
+
+    let dns_server = DnsServer::new("tcp://1.1.1.1".to_string());
+    config.dns.servers.push(dns_server);
+    let mut dns_server = DnsServer::new("tcp://114.114.114.114".to_string());
+    dns_server.domains.push("geosite:cn".to_string());
+    config.dns.servers.push(dns_server);
+    let dns_server = DnsServer::new("tcp://114.114.115.115".to_string());
+    config.dns.servers.push(dns_server);
 
     let app = App::new(config)?;
     app.run()
