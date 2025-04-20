@@ -4,6 +4,8 @@ A Rust rule-based tunnel targeting to enduser for secure & reliable network acce
 ## Features
 This project is still in the very early development stage. Welcome anyone interested to join.
 
+✅ Implemented 🚧 Under construction ❌ Not yet implemented
+
 - Inbound
 	- socks(✅ socks5, ❌ socks4)
 	- ✅ http
