@@ -1,14 +1,11 @@
 // https://github.com/shadowsocks/shadowsocks-rust/blob/8865992ac52a9a866021f0fd9744cc411baac58d/crates/shadowsocks-service/src/local/http/http_client.rs#L1
 
-use super::super::ProxySteam;
+use super::super::ProxyStream;
 use super::{
     http_stream::ProxyHttpStream,
     utils::{check_keep_alive, host_addr},
 };
-use crate::app::connect_host;
-use crate::app::dns::DnsManager;
-use crate::app::proxy::Outbounds;
-use crate::app::router::Router;
+use crate::app::{connect_tcp_host, Context as AppContext};
 use crate::common::{invalid_data_error, invalid_input_error, Address};
 use hyper::http::{HeaderValue, Method as HttpMethod, Uri, Version as HttpVersion};
 use hyper::{
@@ -126,10 +123,7 @@ where
     pub async fn send_request(
         &self,
         req: Request<B>,
-        inbound_tag: Option<String>,
-        outbounds: Arc<Outbounds>,
-        router: Arc<Router>,
-        dns: Arc<DnsManager>,
+        context: AppContext,
     ) -> Result<Response<Incoming>> {
         let host = match host_addr(req.uri()) {
             Some(h) => h,
@@ -176,17 +170,7 @@ where
             Address::SocketAddress(ref saddr) => Cow::Owned(saddr.ip().to_string()),
         };
 
-        let c = match HttpConnection::connect(
-            scheme,
-            host.clone(),
-            &domain,
-            &inbound_tag,
-            outbounds,
-            router,
-            dns,
-        )
-        .await
-        {
+        let c = match HttpConnection::connect(scheme, host.clone(), &domain, context).await {
             Ok(c) => c,
             Err(err) => {
                 error!("failed to connect to host: {}, error: {}", host, err);
@@ -261,16 +245,13 @@ where
         scheme: &Scheme,
         host: Address,
         domain: &str,
-        inbound_tag: &Option<String>,
-        outbounds: Arc<Outbounds>,
-        router: Arc<Router>,
-        dns: Arc<DnsManager>,
+        context: AppContext,
     ) -> Result<HttpConnection<B>> {
         if *scheme != Scheme::HTTP && *scheme != Scheme::HTTPS {
             return Err(invalid_input_error("invalid scheme"));
         }
 
-        let stream = connect_host(&host, inbound_tag, outbounds, router, dns).await?;
+        let stream = connect_tcp_host(host.clone(), context).await?;
 
         if *scheme == Scheme::HTTP {
             HttpConnection::connect_http_http1(scheme, host, stream).await
@@ -284,7 +265,7 @@ where
     async fn connect_http_http1(
         scheme: &Scheme,
         host: Address,
-        stream: Box<dyn ProxySteam>,
+        stream: Box<dyn ProxyStream>,
     ) -> Result<HttpConnection<B>> {
         trace!(
             "HTTP making new HTTP/1.1 connection to host: {}, scheme: {}",
@@ -321,7 +302,7 @@ where
         scheme: &Scheme,
         host: Address,
         domain: &str,
-        stream: Box<dyn ProxySteam>,
+        stream: Box<dyn ProxyStream>,
     ) -> Result<HttpConnection<B>> {
         trace!(
             "HTTP making new TLS connection to host: {}, scheme: {}",

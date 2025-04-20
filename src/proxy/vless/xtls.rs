@@ -1,10 +1,12 @@
-use super::super::ProxySteam;
+use super::super::{AsTcpStream, LocalAddr, ProxyStream};
 use crate::common::{find_str_in_str, DEFAULT_BUF_SIZE};
-use crate::transport::tls::{AsRawTcp, TlsStream};
+use crate::impl_asyncwrite_flush_shutdown;
+use crate::transport::tls::TlsStream;
 use bytes::{Buf, BufMut, BytesMut};
 use futures::ready;
 use rand::prelude::*;
-use std::io;
+use std::io::Result;
+use std::net::SocketAddr;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
@@ -100,7 +102,7 @@ impl From<u16> for Tls13CipherSuite {
     }
 }
 
-pub(crate) struct TrafficState {
+struct TrafficState {
     pub stream_id: u32,
     pub uuid: Uuid,
     pub is_uuid_written: bool,
@@ -144,138 +146,85 @@ impl TrafficState {
     }
 }
 
-// https://github.com/XTLS/Xray-core/discussions/1295
-// https://github.com/e1732a364fed/xtls-?tab=readme-ov-file#%E6%80%BB%E7%BB%93-xtls%E7%9A%84%E5%8E%9F%E7%90%86
-pub(crate) struct VisionWriter {
-    direct_copy: bool,
-    buffer: BytesMut,
-}
-
-impl VisionWriter {
-    pub fn new() -> Self {
-        Self {
-            direct_copy: false,
-            buffer: BytesMut::new(),
-        }
-    }
-
-    // https://github.com/XTLS/Xray-core/blob/6b6fbcb459a870c5c5cda17ed0f6886d39b9a6cf/proxy/proxy.go#L222
-    pub fn write<S>(
-        &mut self,
-        stream: &mut S,
-        cx: &mut Context<'_>,
-        bytes: &[u8],
-        traffic_state: &mut TrafficState,
-    ) -> Poll<io::Result<usize>>
-    where
-        S: ProxySteam,
-    {
-        if self.direct_copy {
-            let tls_stream = stream
-                .as_any_mut()
-                .downcast_mut::<TlsStream>()
-                .expect("tls stream");
-            let tcp_stream = tls_stream.as_raw_tcp();
-            return Pin::new(tcp_stream).poll_write(cx, bytes);
-        }
-        loop {
-            if self.buffer.is_empty() {
-                self.buffer = if traffic_state.need_padding {
-                    if traffic_state.number_of_packet_to_filter > 0 {
-                        xtls_filter_tls(bytes, traffic_state, "Writer");
-                    }
-                    // TODO:
-                    // mb = ReshapeMultiBuffer(w.ctx, bytes)
-                    if traffic_state.is_tls
-                        && bytes.len() >= 6
-                        && *TLS_APPLICATOIN_DATA_PREFIX == bytes[0..3]
-                    {
-                        let mut command = PaddingCommand::End;
-                        if traffic_state.enable_xtls {
-                            self.direct_copy = true;
-                            command = PaddingCommand::Direct;
-                            log::debug!(
-                                "{} Enable direct copy for writer",
-                                traffic_state.stream_id
-                            );
-                        }
-                        traffic_state.need_padding = false; // padding going to end
-                        xtls_padding(bytes, command, traffic_state, true)
-                    } else if !traffic_state.is_tls12_or_above
-                        && traffic_state.number_of_packet_to_filter <= 1
-                    {
-                        // For compatibility with earlier vision receiver, we finish padding 1 packet early
-                        traffic_state.need_padding = false;
-                        xtls_padding(
-                            bytes,
-                            PaddingCommand::End,
-                            traffic_state,
-                            traffic_state.is_tls,
-                        )
-                    } else {
-                        xtls_padding(
-                            bytes,
-                            PaddingCommand::Continue,
-                            traffic_state,
-                            traffic_state.is_tls,
-                        )
-                    }
-                } else {
-                    BytesMut::from(bytes)
-                };
-            } else {
-                let n = ready!(Pin::new(stream).poll_write(cx, &self.buffer))?;
-                debug_assert!(n == self.buffer.len());
-                self.buffer = BytesMut::new();
-                return Ok(bytes.len()).into();
-            }
-        }
-    }
-}
-
 enum ReadState {
     Reading,
     Unpadding(usize),
     Output(BytesMut, Option<BytesMut>),
 }
 
-pub(crate) struct VisionReader {
-    direct_copy: bool,
-    buffer: [u8; DEFAULT_BUF_SIZE],
+// https://github.com/XTLS/Xray-core/discussions/1295
+// https://github.com/e1732a364fed/xtls-?tab=readme-ov-file#%E6%80%BB%E7%BB%93-xtls%E7%9A%84%E5%8E%9F%E7%90%86
+pub(crate) struct VisionStream<S> {
+    stream: S,
+    traffic_state: TrafficState,
+
+    // for read
+    direct_read: bool,
+    read_buffer: [u8; DEFAULT_BUF_SIZE],
     read_state: ReadState,
+
+    // for write
+    direct_write: bool,
+    write_buffer: BytesMut,
 }
 
-impl VisionReader {
-    pub fn new() -> Self {
+impl<S> LocalAddr for VisionStream<S>
+where
+    S: ProxyStream,
+{
+    fn local_addr(&self) -> Result<SocketAddr> {
+        self.stream.local_addr()
+    }
+}
+
+impl<S> VisionStream<S>
+where
+    S: ProxyStream,
+{
+    pub fn new(stream: S, id: Uuid, stream_id: u32) -> Self {
         Self {
-            direct_copy: false,
-            buffer: [0u8; DEFAULT_BUF_SIZE],
+            stream,
+            traffic_state: TrafficState::new(stream_id, id),
+
+            direct_write: false,
+            write_buffer: BytesMut::new(),
+
+            direct_read: false,
+            read_buffer: [0u8; DEFAULT_BUF_SIZE],
             read_state: ReadState::Reading,
         }
     }
-    pub fn read<S>(
-        &mut self,
-        stream: &mut S,
+
+    pub fn as_raw_stream(&mut self) -> &mut S {
+        &mut self.stream
+    }
+}
+
+impl<S> AsyncRead for VisionStream<S>
+where
+    S: ProxyStream,
+{
+    fn poll_read(
+        self: Pin<&mut Self>,
         cx: &mut Context<'_>,
         buf: &mut ReadBuf<'_>,
-        traffic_state: &mut TrafficState,
-    ) -> Poll<io::Result<()>>
-    where
-        S: ProxySteam,
-    {
-        if self.direct_copy {
-            let tls_stream = stream
+    ) -> Poll<Result<()>> {
+        let this = self.get_mut();
+
+        if this.direct_read {
+            let tls_stream = this
+                .stream
                 .as_any_mut()
                 .downcast_mut::<TlsStream>()
                 .expect("tls stream");
-            let tcp_stream = tls_stream.as_raw_tcp();
+            let tcp_stream = tls_stream.as_tcp_stream();
             return Pin::new(tcp_stream).poll_read(cx, buf);
         }
         loop {
-            match &mut self.read_state {
+            match &mut this.read_state {
                 ReadState::Reading => {
-                    let mut read_buffer = ReadBuf::new(&mut self.buffer);
-                    ready!(Pin::new(&mut *stream).poll_read(cx, &mut read_buffer)).map_err(
+                    let mut read_buffer = ReadBuf::new(&mut this.read_buffer);
+                    ready!(Pin::new(&mut this.stream).poll_read(cx, &mut read_buffer)).map_err(
                         |e| {
                             log::error!("Xtls read tls error: {:#}", e);
                             e
@@ -283,49 +232,49 @@ impl VisionReader {
                     )?;
                     log::debug!(
                         "{} Vision reader reads {} bytes",
-                        traffic_state.stream_id,
+                        this.traffic_state.stream_id,
                         read_buffer.filled().len()
                     );
                     if read_buffer.filled().is_empty() {
                         return Ok(()).into();
                     }
-                    self.read_state = ReadState::Unpadding(read_buffer.filled().len());
+                    this.read_state = ReadState::Unpadding(read_buffer.filled().len());
                 }
                 ReadState::Unpadding(filled_size) => {
-                    let mut buffer = BytesMut::from(&self.buffer[..*filled_size]);
-                    let bytes_left = if traffic_state.within_padding_buffers
-                        || traffic_state.number_of_packet_to_filter > 0
+                    let mut buffer = BytesMut::from(&this.read_buffer[..*filled_size]);
+                    let bytes_left = if this.traffic_state.within_padding_buffers
+                        || this.traffic_state.number_of_packet_to_filter > 0
                     {
-                        let bytes_left = xtls_unpadding(&mut buffer, traffic_state);
-                        if traffic_state.remaining_content > 0
-                            || traffic_state.remaining_padding > 0
-                            || traffic_state.padding_command == PaddingCommand::Continue
+                        let bytes_left = xtls_unpadding(&mut buffer, &mut this.traffic_state);
+                        if this.traffic_state.remaining_content > 0
+                            || this.traffic_state.remaining_padding > 0
+                            || this.traffic_state.padding_command == PaddingCommand::Continue
                         {
-                            traffic_state.within_padding_buffers = true;
-                        } else if traffic_state.padding_command == PaddingCommand::End {
-                            traffic_state.within_padding_buffers = false;
-                        } else if traffic_state.padding_command == PaddingCommand::Direct {
-                            traffic_state.within_padding_buffers = false;
-                            self.direct_copy = true;
+                            this.traffic_state.within_padding_buffers = true;
+                        } else if this.traffic_state.padding_command == PaddingCommand::End {
+                            this.traffic_state.within_padding_buffers = false;
+                        } else if this.traffic_state.padding_command == PaddingCommand::Direct {
+                            this.traffic_state.within_padding_buffers = false;
+                            this.direct_read = true;
                             log::debug!(
                                 "{} Enable direct copy for reader",
-                                traffic_state.stream_id
+                                this.traffic_state.stream_id
                             );
                         } else {
                             log::error!(
                                 "{} XtlsRead unknown command {}",
-                                traffic_state.stream_id,
-                                traffic_state.padding_command
+                                this.traffic_state.stream_id,
+                                this.traffic_state.padding_command
                             )
                         }
-                        if traffic_state.number_of_packet_to_filter > 0 {
-                            xtls_filter_tls(&buffer, traffic_state, "Reader");
+                        if this.traffic_state.number_of_packet_to_filter > 0 {
+                            xtls_filter_tls(&buffer, &mut this.traffic_state, "Reader");
                         }
                         bytes_left
                     } else {
                         None
                     };
-                    self.read_state = ReadState::Output(buffer, bytes_left);
+                    this.read_state = ReadState::Output(buffer, bytes_left);
                 }
                 ReadState::Output(ref mut buffer, bytes_left) => {
                     let len = buf.remaining();
@@ -334,26 +283,101 @@ impl VisionReader {
                         if let Some(bytes_left) = bytes_left {
                             log::debug!(
                                 "{} Xtls package has {} bytes remaining after unpadding ",
-                                traffic_state.stream_id,
+                                this.traffic_state.stream_id,
                                 bytes_left.len()
                             );
-                            let mut read_buffer = ReadBuf::new(&mut self.buffer);
+                            let mut read_buffer = ReadBuf::new(&mut this.read_buffer);
                             read_buffer.put_slice(bytes_left);
-                            self.read_state = ReadState::Unpadding(bytes_left.len());
+                            this.read_state = ReadState::Unpadding(bytes_left.len());
                             continue;
                         }
-                        self.read_state = ReadState::Reading;
+                        this.read_state = ReadState::Reading;
                         return Ok(()).into();
                     } else {
                         let buffer_left = buffer.split_off(len);
                         buf.put_slice(buffer);
-                        self.read_state = ReadState::Output(buffer_left, bytes_left.clone());
+                        this.read_state = ReadState::Output(buffer_left, bytes_left.clone());
                         return Ok(()).into();
                     }
                 }
             }
         }
     }
+}
+
+impl<S> AsyncWrite for VisionStream<S>
+where
+    S: ProxyStream,
+{
+    // https://github.com/XTLS/Xray-core/blob/6b6fbcb459a870c5c5cda17ed0f6886d39b9a6cf/proxy/proxy.go#L222
+    fn poll_write(self: Pin<&mut Self>, cx: &mut Context<'_>, buf: &[u8]) -> Poll<Result<usize>> {
+        let this = self.get_mut();
+        if this.direct_write {
+            let tls_stream = this
+                .stream
+                .as_any_mut()
+                .downcast_mut::<TlsStream>()
+                .expect("tls stream");
+            let tcp_stream = tls_stream.as_tcp_stream();
+            return Pin::new(tcp_stream).poll_write(cx, buf);
+        }
+        loop {
+            if this.write_buffer.is_empty() {
+                this.write_buffer = if this.traffic_state.need_padding {
+                    if this.traffic_state.number_of_packet_to_filter > 0 {
+                        xtls_filter_tls(buf, &mut this.traffic_state, "Writer");
+                    }
+                    // TODO:
+                    // mb = ReshapeMultiBuffer(w.ctx, bytes)
+                    if this.traffic_state.is_tls
+                        && buf.len() >= 6
+                        && *TLS_APPLICATOIN_DATA_PREFIX == buf[0..3]
+                    {
+                        let mut command = PaddingCommand::End;
+                        if this.traffic_state.enable_xtls {
+                            this.direct_write = true;
+                            command = PaddingCommand::Direct;
+                            log::debug!(
+                                "{} Enable direct copy for writer",
+                                this.traffic_state.stream_id
+                            );
+                        }
+                        this.traffic_state.need_padding = false; // padding going to end
+                        xtls_padding(buf, command, &mut this.traffic_state, true)
+                    } else if !this.traffic_state.is_tls12_or_above
+                        && this.traffic_state.number_of_packet_to_filter <= 1
+                    {
+                        // For compatibility with earlier vision receiver, we finish padding 1 packet early
+                        this.traffic_state.need_padding = false;
+                        let long_padding = this.traffic_state.is_tls;
+                        xtls_padding(
+                            buf,
+                            PaddingCommand::End,
+                            &mut this.traffic_state,
+                            long_padding,
+                        )
+                    } else {
+                        let long_padding = this.traffic_state.is_tls;
+                        xtls_padding(
+                            buf,
+                            PaddingCommand::Continue,
+                            &mut this.traffic_state,
+                            long_padding,
+                        )
+                    }
+                } else {
+                    BytesMut::from(buf)
+                };
+            } else {
+                let n = ready!(Pin::new(&mut this.stream).poll_write(cx, &this.write_buffer))?;
+                debug_assert!(n == this.write_buffer.len());
+                this.write_buffer = BytesMut::new();
+                return Ok(buf.len()).into();
+            }
+        }
+    }
+
+    impl_asyncwrite_flush_shutdown!(stream);
 }
 
 // https://github.com/XTLS/Xray-core/blob/6b6fbcb459a870c5c5cda17ed0f6886d39b9a6cf/proxy/proxy.go#L307

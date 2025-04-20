@@ -5,7 +5,16 @@ pub use shadowsocks::relay::Address;
 use std::io::{Error, ErrorKind, Result};
 use tokio::io::{copy_bidirectional_with_sizes, AsyncRead, AsyncWrite};
 
+/// shadowsocks-rust, xray and tokio copy_bidirectional method all use 8k buffer
 pub const DEFAULT_BUF_SIZE: usize = 8 * 1024;
+
+/// https://github.com/shadowsocks/shadowsocks-rust/blob/c02d2edbff27d8be4cf542c3c3cd0fc6a059c8bd/crates/shadowsocks/src/relay/udprelay/mod.rs#L66-L70
+/// The maximum UDP payload size (defined in the original shadowsocks Python)
+///
+/// *I cannot find any references about why clowwindy used this value as the maximum
+/// The only thing I can find is
+/// [here](http://support.microsoft.com/kb/822061/)*
+pub const MAXIMUM_UDP_PAYLOAD_SIZE: usize = 65536;
 
 pub fn invalid_input_error<T: ToString>(message: T) -> Error {
     Error::new(ErrorKind::InvalidInput, message.to_string())

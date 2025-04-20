@@ -27,12 +27,13 @@ actix-rt = "2.10"
 actix-server = "2.5"
 actix-service = "2.0"
 async-trait = "0.1"
+blake3 = "1.8.1"
 bytes = "1"
 env_logger = "0.11"
 futures = "0.3"
 hyper = { version = "1", features = ["full"] }
 http-body-util  = "0.1"
-hickory-resolver = "0.25.0-alpha.4"
+hickory-resolver = "0.25"
 hyper-util = { version = "0.1", features = ["full"] }
 log = "0.4"
 lru_time_cache = { version = "0.11", optional = true }
@@ -46,10 +47,11 @@ rustls = "0.23.23"
 rustls-pki-types = "1.11.0"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-shadowsocks = { version = "1.22.0", features = ["aead-cipher-2022", "security-replay-attack-detect"] }
-shadowsocks-crypto = "0.5.8"
+shadowsocks = { version = "1.23.0", features = ["aead-cipher-2022", "security-replay-attack-detect"] }
+shadowsocks-crypto = { version = "0.6.0", default-features = false }
 tokio = { version = "1", features = ["net", "io-util", "macros", "sync"] }
 tokio-rustls = { version = "0.26", optional = true, default-features = false }
+trait-variant = "0.1"
 uuid = {version = "1.13.1", features = ["v5"]}
 webpki-roots = "0.26.8"
 

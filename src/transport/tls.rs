@@ -1,6 +1,7 @@
 use super::raw::{ConnectOpts, TcpStream};
 use crate::app::config::TlsSettings;
 use crate::common::{invalid_data_error, invalid_input_error, Address};
+use crate::proxy::{AsTcpStream, LocalAddr};
 use futures::ready;
 use once_cell::sync::Lazy;
 use rustls::{ClientConfig, ClientConnection, KeyLogFile, RootCertStore};
@@ -48,7 +49,6 @@ impl Tls {
             .with_no_client_auth();
         tls_config.alpn_protocols.extend(tls_settings.alpn);
         tls_config.key_log = Arc::new(KeyLogFile::new());
-        //tls_config.max_fragment_size = Some(crate::common::DEFAULT_BUF_SIZE);
         let server_name = if let Some(server_name) = tls_settings.server_name {
             ServerName::try_from(server_name.clone()).map_err(|_| {
                 invalid_input_error(format!(
@@ -89,10 +89,6 @@ impl Tls {
     }
 }
 
-pub trait AsRawTcp {
-    fn as_raw_tcp(&mut self) -> &mut TcpStream;
-}
-
 enum ReadState {
     ReadHead([u8; 5], usize),
     ReadBody(Vec<u8>, usize),
@@ -106,9 +102,15 @@ pub struct TlsStream {
     xtls: bool,
 }
 
-impl AsRawTcp for TlsStream {
-    fn as_raw_tcp(&mut self) -> &mut TcpStream {
+impl AsTcpStream for TlsStream {
+    fn as_tcp_stream(&mut self) -> &mut TcpStream {
         &mut self.conn
+    }
+}
+
+impl LocalAddr for TlsStream {
+    fn local_addr(&self) -> Result<SocketAddr> {
+        self.conn.local_addr()
     }
 }
 
@@ -213,6 +215,8 @@ impl AsyncRead for TlsStream {
                 this.session.reader().consume(len);
                 Poll::Ready(Ok(()))
             }
+            // TODO:
+            // handle eof separately
             Err(e) => Poll::Ready(Err(e)),
         }
     }

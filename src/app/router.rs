@@ -1,4 +1,4 @@
-use super::config::RoutingConfig;
+use super::config::{DomainStrategy, RoutingConfig};
 use super::dat::{Cidr, Domain as ProtoDomain, GeoIpList, GeoSiteList};
 use super::dns::DnsManager;
 use super::proxy::Outbounds;
@@ -21,7 +21,9 @@ pub struct Router {
     domain_sites: HashMap<String, Vec<Domain>>,
     ip_sites: HashMap<String, Vec<IpRange>>,
     rules: Vec<Rule>,
+    // TODO: replace with LruCache
     cache: RwLock<HashMap<(Address, Option<String>), String>>,
+    strategy: DomainStrategy,
 }
 
 impl Router {
@@ -193,6 +195,7 @@ impl Router {
             ip_sites,
             rules,
             cache: RwLock::new(HashMap::new()),
+            strategy: config.domain_strategy,
         })
     }
 
@@ -213,9 +216,13 @@ impl Router {
         _dns: &Arc<DnsManager>,
         addr: &Address,
         tag: &Option<String>,
-    ) -> String {
+    ) -> Result<String> {
         // TODO: IPIfNonMatch, IPOnDemand
-        self.pick_internal(addr, tag).await
+        if self.strategy != DomainStrategy::AsIs {
+            let ip = _dns.resolve(addr).await?;
+            log::info!("{} was resolved to {}", addr, ip);
+        }
+        Ok(self.pick_internal(addr, tag).await)
     }
 
     pub async fn pick_after_resolve(&self, addr: &SocketAddr, tag: &Option<String>) -> String {

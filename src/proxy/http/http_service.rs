@@ -4,10 +4,8 @@ use super::{
     http_client::HttpClient,
     utils::{authority_addr, check_keep_alive, host_addr},
 };
-use crate::app::dns::DnsManager;
 use crate::app::establish_tcp_tunnel;
-use crate::app::proxy::Outbounds;
-use crate::app::router::Router;
+use crate::app::Context;
 use crate::common::Address;
 use bytes::Bytes;
 use http_body_util::{combinators::BoxBody, BodyExt};
@@ -19,7 +17,7 @@ use hyper::{
 };
 use hyper_util::rt::TokioIo;
 use log::{debug, error, trace};
-use std::{collections::HashMap, net::SocketAddr, str::FromStr, sync::Arc};
+use std::{collections::HashMap, net::SocketAddr, str::FromStr};
 
 pub(crate) struct HttpService {
     peer_addr: SocketAddr,
@@ -38,10 +36,7 @@ impl HttpService {
         self,
         mut req: Request<Incoming>,
         accounts: &HashMap<String, String>,
-        inbound_tag: Option<String>,
-        outbounds: Arc<Outbounds>,
-        router: Arc<Router>,
-        dns: Arc<DnsManager>,
+        context: Context,
     ) -> hyper::Result<Response<BoxBody<Bytes, hyper::Error>>> {
         trace!("request {} {:?}", self.peer_addr, req);
 
@@ -96,15 +91,7 @@ impl HttpService {
 
                         let upgraded_io = TokioIo::new(upgraded);
                         let mut stream = Box::new(upgraded_io);
-                        let _ = establish_tcp_tunnel(
-                            &mut stream,
-                            &host,
-                            &inbound_tag,
-                            outbounds,
-                            router,
-                            dns,
-                        )
-                        .await;
+                        let _ = establish_tcp_tunnel(&mut stream, host, context).await;
                     }
                     Err(err) => {
                         error!("failed to upgrade CONNECT request, error: {}", err);
@@ -130,11 +117,7 @@ impl HttpService {
         // Set keep-alive for connection with remote
         set_conn_keep_alive(version, req.headers_mut(), conn_keep_alive);
 
-        let mut res = match self
-            .http_client
-            .send_request(req, inbound_tag, outbounds, router, dns)
-            .await
-        {
+        let mut res = match self.http_client.send_request(req, context).await {
             Ok(resp) => resp,
             Err(_) => return make_internal_server_error(),
         };

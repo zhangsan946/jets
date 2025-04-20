@@ -3,8 +3,8 @@ use super::dat::GeoSiteList;
 use super::router::{Domain, MatchType, Router};
 use crate::app::proxy::Outbounds;
 use crate::common::{invalid_input_error, Address};
-use crate::proxy::{Outbound, ProxySteam, SyncProxyStream};
-use crate::transport::raw::UdpSocket;
+use crate::proxy::{Outbound, ProxySocket, ProxyStream};
+use futures::ready;
 use hickory_resolver::config::{LookupIpStrategy, NameServerConfig, ResolverConfig, ResolverOpts};
 use hickory_resolver::name_server::GenericConnector;
 use hickory_resolver::proto::runtime::iocompat::AsyncIoTokioAsStd;
@@ -23,10 +23,12 @@ use std::pin::Pin;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
+use tokio::io::ReadBuf;
 use tokio::runtime::Runtime;
 use tokio::sync::RwLock;
 
 pub struct DnsManager {
+    // TODO: replace with other Cache
     cache: RwLock<HashMap<String, (Instant, IpAddr)>>,
     hosts: Vec<(Domain, Vec<IpAddr>)>,
     // Try to use these resolvers if domain matches
@@ -112,7 +114,7 @@ impl DnsManager {
                     .ok_or_else(|| invalid_input_error("Invalid default outbound tag set for dns"))?
                     .clone()
             } else {
-                outbounds.get_default_freedom().ok_or_else(|| invalid_input_error("It needs to have at least one freedom outbound if dns default outbound tag is not set"))?
+                outbounds.first_freedom().ok_or_else(|| invalid_input_error("It needs to have at least one freedom outbound if dns default outbound tag is not set"))?
             };
             let resolver = Arc::new(create_resolver(resolver_config, options.clone(), outbound));
             if server.domains.is_empty() {
@@ -139,7 +141,10 @@ impl DnsManager {
             Address::DomainNameAddress(domain, port) => (domain, port),
             Address::SocketAddress(addr) => return Ok(*addr),
         };
-        if let Some(v) = self.cache.read().await.get(domain) {
+        let read_lock = self.cache.read().await;
+        let ip_entry = read_lock.get(domain).map(|v| v.to_owned());
+        drop(read_lock);
+        if let Some(v) = ip_entry {
             if v.0 < Instant::now() {
                 self.cache.write().await.remove(domain);
             } else {
@@ -312,9 +317,10 @@ impl DnsRuntimeProvider {
 
 impl RuntimeProvider for DnsRuntimeProvider {
     type Handle = TokioHandle;
-    type Tcp = AsyncIoTokioAsStd<SyncProxyStream<Box<dyn ProxySteam>>>;
+    //type Tcp = AsyncIoTokioAsStd<SyncProxyStream<Box<dyn ProxyStream>>>;
+    type Tcp = AsyncIoTokioAsStd<Box<dyn ProxyStream>>;
     type Timer = TokioTime;
-    type Udp = UdpSocket;
+    type Udp = Box<dyn ProxySocket>;
 
     fn create_handle(&self) -> Self::Handle {
         self.handle.clone()
@@ -331,27 +337,30 @@ impl RuntimeProvider for DnsRuntimeProvider {
 
         Box::pin(async move {
             let addr = Address::SocketAddress(server_addr);
-            let stream = match tokio::time::timeout(wait_for, outbound.handle(&addr)).await {
+            let stream = match tokio::time::timeout(wait_for, outbound.connect_tcp(addr)).await {
                 Ok(Ok(s)) => s,
                 Ok(Err(err)) => return Err(err),
                 Err(_) => return Err(ErrorKind::TimedOut.into()),
             };
-            let stream = SyncProxyStream::new(stream);
+            //let stream = SyncProxyStream::new(stream);
             Ok(AsyncIoTokioAsStd(stream))
         })
     }
 
     fn bind_udp(
         &self,
-        _local_addr: SocketAddr,
-        _server_addr: SocketAddr,
+        local_addr: SocketAddr,
+        server_addr: SocketAddr,
     ) -> Pin<Box<dyn Send + Future<Output = Result<Self::Udp>>>> {
-        // let connect_opts = self.connect_opts.clone();
-        // Box::pin(async move {
-        //     let udp = ShadowUdpSocket::bind_with_opts(&local_addr, &connect_opts).await?;
-        //     Ok(udp)
-        // })
-        todo!("bind_udp")
+        let outbound = self.outbound.clone();
+        Box::pin(async move {
+            // It doesn't matter what passed as peer to outbound.bind, as:
+            // 1. NAT type doesn't matter
+            // 2. It is one-time back and forth communication
+            // so just pass local_addr to meet the requirement
+            let udp = outbound.bind(local_addr, server_addr).await?;
+            Ok(udp)
+        })
     }
 }
 
@@ -363,9 +372,40 @@ fn create_resolver(
     options: ResolverOpts,
     outbound: Arc<Box<dyn Outbound>>,
 ) -> DnsResolver {
-    DnsResolver::new(
+    let mut builder = DnsResolver::builder_with_config(
         config,
-        options,
         DnsConnectionProvider::new(DnsRuntimeProvider::new(outbound)),
-    )
+    );
+    *builder.options_mut() = options;
+    builder.build()
+}
+
+use hickory_resolver::proto::udp::DnsUdpSocket;
+use std::task::{Context, Poll};
+impl DnsUdpSocket for Box<dyn ProxySocket> {
+    type Time = hickory_resolver::proto::runtime::TokioTime;
+
+    fn poll_recv_from(
+        &self,
+        cx: &mut Context<'_>,
+        buf: &mut [u8],
+    ) -> Poll<Result<(usize, SocketAddr)>> {
+        let mut buffer = ReadBuf::new(buf);
+        let addr = ready!(ProxySocket::poll_recv_from(self.as_ref(), cx, &mut buffer))?;
+        let len = buffer.filled().len();
+        let socket_addr = match addr {
+            Address::SocketAddress(addr) => addr,
+            Address::DomainNameAddress(_, _) => unreachable!(),
+        };
+        Poll::Ready(Ok((len, socket_addr)))
+    }
+
+    fn poll_send_to(
+        &self,
+        cx: &mut Context<'_>,
+        buf: &[u8],
+        target: SocketAddr,
+    ) -> Poll<Result<usize>> {
+        ProxySocket::poll_send_to(self.as_ref(), cx, buf, Address::SocketAddress(target))
+    }
 }

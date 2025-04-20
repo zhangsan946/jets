@@ -2,30 +2,34 @@ pub mod blackhole;
 pub mod freedom;
 #[cfg(feature = "local-http")]
 pub mod http;
+pub mod net_manager;
 pub mod shadowsocks;
 pub mod socks;
 pub mod vless;
 
 use crate::app::config::OutboundProtocolOption;
 use crate::app::dns::DnsManager;
-use crate::app::proxy::Outbounds;
-use crate::app::router::Router;
+use crate::app::Context as AppContext;
 use crate::common::Address;
+use crate::transport::raw::TcpStream;
 use async_trait::async_trait;
 use bytes::BufMut;
-use futures::{ready, FutureExt};
+use futures::ready;
+//use std::future::poll_fn;
 use std::io::{ErrorKind, Result};
-use std::ops::DerefMut;
+use std::net::SocketAddr;
 use std::pin::Pin;
-use std::sync::Arc;
 use std::task::{Context, Poll};
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
-use tokio::net::TcpStream;
-use tokio::sync::Mutex;
+
+pub trait AsTcpStream {
+    fn as_tcp_stream(&mut self) -> &mut TcpStream;
+}
 
 pub trait AsAny: 'static {
     fn as_any(&self) -> &dyn std::any::Any;
     fn as_any_mut(&mut self) -> &mut dyn std::any::Any;
+    fn into_any(self: Box<Self>) -> Box<dyn std::any::Any>;
 }
 
 impl<T: 'static> AsAny for T {
@@ -35,12 +39,19 @@ impl<T: 'static> AsAny for T {
     fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
         self
     }
+    fn into_any(self: Box<Self>) -> Box<dyn std::any::Any> {
+        self
+    }
 }
 
-pub trait ProxySteam: AsyncRead + AsyncWrite + Unpin + Send + AsAny {
+pub trait LocalAddr {
+    fn local_addr(&self) -> Result<SocketAddr>;
+}
+
+pub trait ProxyStream: AsyncRead + AsyncWrite + Send + Sync + Unpin + AsAny + LocalAddr {
     fn poll_read_exact(&mut self, cx: &mut Context<'_>, buf: &mut [u8]) -> Poll<Result<usize>>;
 }
-impl<T: AsyncRead + AsyncWrite + Unpin + Send + AsAny> ProxySteam for T {
+impl<T: AsyncRead + AsyncWrite + Send + Sync + Unpin + AsAny + LocalAddr> ProxyStream for T {
     fn poll_read_exact(&mut self, cx: &mut Context<'_>, buf: &mut [u8]) -> Poll<Result<usize>> {
         let size = buf.len();
         if size == 0 {
@@ -77,79 +88,96 @@ impl<T: AsyncRead + AsyncWrite + Unpin + Send + AsAny> ProxySteam for T {
     }
 }
 
-pub struct SyncProxyStream<S> {
-    stream: Arc<Mutex<S>>,
-}
+// use futures::FutureExt;
+// use std::ops::DerefMut;
+// use tokio::sync::Mutex;
+// pub struct SyncProxyStream<S> {
+//     stream: Arc<Mutex<S>>,
+// }
 
-impl<S> SyncProxyStream<S>
-where
-    S: AsyncRead + AsyncWrite + Unpin + Send,
-{
-    pub fn new(stream: S) -> Self {
-        Self {
-            stream: Arc::new(Mutex::new(stream)),
-        }
-    }
-}
+// impl<S> SyncProxyStream<S>
+// where
+//     S: AsyncRead + AsyncWrite + Unpin + Send,
+// {
+//     pub fn new(stream: S) -> Self {
+//         Self {
+//             stream: Arc::new(Mutex::new(stream)),
+//         }
+//     }
+// }
 
-impl<S> AsyncRead for SyncProxyStream<S>
-where
-    S: AsyncRead + Unpin + Send,
-{
-    fn poll_read(
-        self: Pin<&mut Self>,
+// macro_rules! forward_call {
+//     ($self:expr, $method:ident, $cx:expr $(, $param:expr)*) => {{
+//         let mut stream_fut = Box::pin($self.get_mut().stream.lock());
+//         let mut stream = ready!(stream_fut.as_mut().poll_unpin($cx));
+//         let mut stream = stream.deref_mut();
+//         Pin::new(&mut stream).$method($cx, $($param),*)
+//     }};
+// }
+
+// impl<S> AsyncRead for SyncProxyStream<S>
+// where
+//     S: AsyncRead + Unpin + Send,
+// {
+//     fn poll_read(
+//         self: Pin<&mut Self>,
+//         cx: &mut Context<'_>,
+//         buf: &mut ReadBuf<'_>,
+//     ) -> Poll<Result<()>> {
+//         forward_call!(self, poll_read, cx, buf)
+//     }
+// }
+
+// impl<S> AsyncWrite for SyncProxyStream<S>
+// where
+//     S: AsyncWrite + Unpin + Send,
+// {
+//     fn poll_write(self: Pin<&mut Self>, cx: &mut Context<'_>, buf: &[u8]) -> Poll<Result<usize>> {
+//         forward_call!(self, poll_write, cx, buf)
+//     }
+
+//     fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<()>> {
+//         forward_call!(self, poll_flush, cx)
+//     }
+
+//     fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<()>> {
+//         forward_call!(self, poll_shutdown, cx)
+//     }
+// }
+
+pub trait ProxySocket: Send + Sync + Unpin {
+    fn poll_recv_from(&self, cx: &mut Context<'_>, buf: &mut ReadBuf<'_>) -> Poll<Result<Address>>;
+
+    fn poll_send_to(
+        &self,
         cx: &mut Context<'_>,
-        buf: &mut ReadBuf<'_>,
-    ) -> Poll<Result<()>> {
-        let this = self.get_mut();
-        let mut stream_fut = Box::pin(this.stream.lock());
-        let mut stream = ready!(stream_fut.as_mut().poll_unpin(cx));
-        let mut stream = stream.deref_mut();
-        Pin::new(&mut stream).poll_read(cx, buf)
-    }
-}
+        buf: &[u8],
+        target: Address,
+    ) -> Poll<Result<usize>>;
 
-impl<S> AsyncWrite for SyncProxyStream<S>
-where
-    S: AsyncWrite + Unpin + Send,
-{
-    fn poll_write(self: Pin<&mut Self>, cx: &mut Context<'_>, buf: &[u8]) -> Poll<Result<usize>> {
-        let this = self.get_mut();
-        let mut stream_fut = Box::pin(this.stream.lock());
-        let mut stream = ready!(stream_fut.as_mut().poll_unpin(cx));
-        let mut stream = stream.deref_mut();
-        Pin::new(&mut stream).poll_write(cx, buf)
-    }
+    // fn recv_from(&self, buf: &mut ReadBuf<'_>) -> impl std::future::Future<Output = Result<Address>> + Send {
+    //     async {
+    //         poll_fn(|cx| self.poll_recv_from(cx, buf)).await
+    //     }
+    // }
 
-    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<()>> {
-        let this = self.get_mut();
-        let mut stream_fut = Box::pin(this.stream.lock());
-        let mut stream = ready!(stream_fut.as_mut().poll_unpin(cx));
-        let mut stream = stream.deref_mut();
-        Pin::new(&mut stream).poll_flush(cx)
-    }
-
-    fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<()>> {
-        let this = self.get_mut();
-        let mut stream_fut = Box::pin(this.stream.lock());
-        let mut stream = ready!(stream_fut.as_mut().poll_unpin(cx));
-        let mut stream = stream.deref_mut();
-        Pin::new(&mut stream).poll_shutdown(cx)
-    }
+    // fn send_to(&self, buf: &[u8], target: Address) -> impl std::future::Future<Output = Result<usize>> + Send {
+    //     async move {
+    //         let mut target = Some(target);
+    //         poll_fn(move |cx| {
+    //             let target = target.take().unwrap();
+    //             self.poll_send_to(cx, buf, target)
+    //         }).await
+    //     }
+    // }
 }
 
 #[async_trait]
-pub trait Inbound: Sync + Send {
-    fn addr(&self) -> &Address;
+pub trait Inbound: Send + Sync {
+    fn addr(&self) -> &SocketAddr;
     fn clone_box(&self) -> Box<dyn Inbound>;
-    async fn handle(
-        &self,
-        stream: TcpStream,
-        inbound_tag: Option<String>,
-        outbounds: Arc<Outbounds>,
-        router: Arc<Router>,
-        dns: Arc<DnsManager>,
-    ) -> Result<()>;
+    async fn handle_tcp(&self, stream: tokio::net::TcpStream, context: AppContext) -> Result<()>;
+    async fn run_udp_server(&self, context: AppContext) -> Result<()>;
 }
 
 impl Clone for Box<dyn Inbound> {
@@ -159,10 +187,11 @@ impl Clone for Box<dyn Inbound> {
 }
 
 #[async_trait]
-pub trait Outbound: Sync + Send {
-    async fn handle(&self, addr: &Address) -> Result<Box<dyn ProxySteam>>;
+pub trait Outbound: Send + Sync {
     fn protocol(&self) -> OutboundProtocolOption;
     async fn pre_connect(&self, dns: &DnsManager) -> Result<Option<Box<dyn Outbound>>>;
+    async fn connect_tcp(&self, addr: Address) -> Result<Box<dyn ProxyStream>>;
+    async fn bind(&self, peer: SocketAddr, target: SocketAddr) -> Result<Box<dyn ProxySocket>>;
 }
 
 pub mod request_command {
@@ -175,4 +204,11 @@ pub mod address_type {
     pub const IPV4: u8 = 1;
     pub const DOMAIN: u8 = 2;
     pub const IPV6: u8 = 3;
+}
+
+pub mod mux_command {
+    pub const NEW: u8 = 1;
+    pub const KEEP: u8 = 2;
+    pub const END: u8 = 3;
+    pub const KEEP_ALIVE: u8 = 4;
 }

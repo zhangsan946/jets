@@ -16,6 +16,7 @@ use crate::proxy::{
 use crate::proxy::{Inbound, Outbound};
 use std::collections::{HashMap, HashSet};
 use std::io::{Error, ErrorKind, Result};
+use std::net::SocketAddr;
 use std::str::FromStr;
 use std::sync::Arc;
 
@@ -116,7 +117,7 @@ impl Outbounds {
         self.inner.iter_mut()
     }
 
-    pub fn get_default_freedom(&self) -> Option<Arc<Box<dyn Outbound>>> {
+    pub fn first_freedom(&self) -> Option<Arc<Box<dyn Outbound>>> {
         self.freedom.clone()
     }
 }
@@ -126,7 +127,7 @@ fn parse_inbound(inbound: InboundConfig) -> Result<Box<dyn Inbound>> {
         #[cfg(feature = "local-http")]
         InboundProtocolOption::Http => {
             let addr = format!("{}:{}", inbound.listen, inbound.port);
-            let addr = Address::from_str(&addr).map_err(|_| invalid_input_error(addr))?;
+            let addr = SocketAddr::from_str(&addr).map_err(|_| invalid_input_error(addr))?;
             let accounts = if let InboundSettings::Http { accounts } = inbound.settings {
                 accounts
             } else {
@@ -142,18 +143,18 @@ fn parse_inbound(inbound: InboundConfig) -> Result<Box<dyn Inbound>> {
         )),
         InboundProtocolOption::Socks => {
             let addr = format!("{}:{}", inbound.listen, inbound.port);
-            let addr = Address::from_str(&addr).map_err(|_| invalid_input_error(addr))?;
-            let accounts = if let InboundSettings::Socks {
+            let addr = SocketAddr::from_str(&addr).map_err(|_| invalid_input_error(addr))?;
+            let (accounts, udp_enabled) = if let InboundSettings::Socks {
                 auth: _,
                 accounts,
-                udp: _,
+                udp,
             } = inbound.settings
             {
-                accounts
+                (accounts, udp)
             } else {
-                Vec::new()
+                (Vec::new(), false)
             };
-            let socks_inbound = SocksInbound::new(addr, accounts);
+            let socks_inbound = SocksInbound::new(addr, accounts, udp_enabled);
             Ok(Box::new(socks_inbound) as Box<dyn Inbound>)
         }
     }

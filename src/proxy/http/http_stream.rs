@@ -1,7 +1,7 @@
 // https://github.com/shadowsocks/shadowsocks-rust/blob/8865992ac52a9a866021f0fd9744cc411baac58d/crates/shadowsocks-service/src/local/http/http_stream.rs
 
 use crate::common::invalid_input_error;
-use crate::proxy::ProxySteam;
+use crate::proxy::ProxyStream;
 use crate::transport::tls::ROOT_CERT_STORE;
 use once_cell::sync::Lazy;
 use pin_project::pin_project;
@@ -20,20 +20,20 @@ use tokio_rustls::{
 #[allow(clippy::large_enum_variant)]
 #[pin_project(project = ProxyHttpStreamProj)]
 pub enum ProxyHttpStream {
-    Http(#[pin] Box<dyn ProxySteam>),
+    Http(#[pin] Box<dyn ProxyStream>),
     Https(
-        #[pin] tokio_rustls::client::TlsStream<Box<dyn ProxySteam>>,
+        #[pin] tokio_rustls::client::TlsStream<Box<dyn ProxyStream>>,
         bool,
     ),
 }
 
 impl ProxyHttpStream {
-    pub fn connect_http(stream: Box<dyn ProxySteam>) -> ProxyHttpStream {
+    pub fn connect_http(stream: Box<dyn ProxyStream>) -> ProxyHttpStream {
         ProxyHttpStream::Http(stream)
     }
 
     pub async fn connect_https(
-        stream: Box<dyn ProxySteam>,
+        stream: Box<dyn ProxyStream>,
         domain: &str,
     ) -> Result<ProxyHttpStream> {
         static TLS_CONFIG: Lazy<Arc<ClientConfig>> = Lazy::new(|| {

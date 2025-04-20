@@ -23,23 +23,22 @@ This project is still in the very early development stage. Welcome anyone intere
 	- ✅ AsIs, ❌ IPIfNonMatch & IPOnDemand
 
 - DNS
+	- ✅ UDP
 	- ✅ DNS over TCP
-	- ❌ UDP
 	- ❌ doh/doq/dot
 
 - Other
-	- ❌ Connection timeout & options
+	- ❌ Connection option && retry && pool
 	- ❌ socks & http auth
-	- ❌ UDP
+	- ✅ UDP Full Cone
 	- ❌ fakedns
 	- ❌ more protocols & configurations
 
 ## Development
 1. Install protocol compiler by downloading a pre-built binary from [Protocol Buffers releases](https://github.com/protocolbuffers/protobuf/releases).
 2. [Intall Rust 1.80.0+](https://www.rust-lang.org/tools/install).
-3. Build or run the code.
+3. Run the code.
 	```Rust
-	cargo build
 	cargo run
 	```
 
@@ -50,3 +49,4 @@ This project is still in the very early development stage. Welcome anyone intere
 1. [shadowsocks-rust](https://github.com/shadowsocks/shadowsocks-rust)
 2. [v2ray-rust](https://github.com/Qv2ray/v2ray-rust)
 3. [Xray-core](https://github.com/XTLS/Xray-core)
+4. [leaf](https://github.com/eycorsican/leaf)

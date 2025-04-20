@@ -1,35 +1,47 @@
 // https://datatracker.ietf.org/doc/html/rfc1928
 
-use super::super::{Inbound, Outbound, ProxySteam};
+use super::super::net_manager::UdpInboundWrite;
+use super::super::{Inbound, Outbound, ProxySocket, ProxyStream};
 use super::SocksInbound;
 use crate::app::config::{OutboundProtocolOption, SocksUser};
+use crate::app::connect_tcp_host;
 use crate::app::dns::DnsManager;
-use crate::app::establish_tcp_tunnel;
-use crate::app::proxy::Outbounds;
-use crate::app::router::Router;
-use crate::common::{invalid_data_error, Address};
+use crate::app::Context as AppContext;
+use crate::common::{copy_bidirectional, invalid_data_error, Address, MAXIMUM_UDP_PAYLOAD_SIZE};
 use crate::pre_check_addr;
-use crate::transport::raw::{ConnectOpts, TcpStream};
+use crate::proxy::net_manager::NatManager;
+use crate::transport::raw::{ConnectOpts, TcpStream, UdpSocket};
 use async_trait::async_trait;
+use bytes::{BufMut, BytesMut};
+use futures::ready;
 use shadowsocks::relay::socks5::{
     self, Command, HandshakeRequest, HandshakeResponse, PasswdAuthRequest, PasswdAuthResponse,
-    Reply, TcpRequestHeader, TcpResponseHeader,
+    Reply, TcpRequestHeader, TcpResponseHeader, UdpAssociateHeader,
 };
 use std::collections::HashMap;
-use std::io::Result;
+use std::io::{Cursor, Read, Result};
+use std::net::{IpAddr, Ipv6Addr, SocketAddr};
 use std::sync::Arc;
+use std::task::{Context, Poll};
+use tokio::io::{AsyncReadExt, ReadBuf};
 use tokio::net::TcpStream as TokioTcpStream;
+use tokio::time::{interval, sleep, Duration};
 
 #[derive(Clone, Debug)]
 pub struct Socks5Inbound {
-    addr: Address,
+    addr: SocketAddr,
     accounts: HashMap<String, String>,
+    udp_enabled: bool,
 }
 
 impl Socks5Inbound {
-    pub fn new(addr: Address, accounts: Vec<(String, String)>) -> Self {
+    pub fn new(addr: SocketAddr, accounts: Vec<(String, String)>, udp_enabled: bool) -> Self {
         let accounts: HashMap<_, _> = accounts.into_iter().collect();
-        Self { addr, accounts }
+        Self {
+            addr,
+            accounts,
+            udp_enabled,
+        }
     }
 }
 
@@ -38,13 +50,14 @@ impl From<SocksInbound> for Socks5Inbound {
         Socks5Inbound {
             addr: value.addr,
             accounts: value.accounts,
+            udp_enabled: value.udp_enabled,
         }
     }
 }
 
 #[async_trait]
 impl Inbound for Socks5Inbound {
-    fn addr(&self) -> &Address {
+    fn addr(&self) -> &SocketAddr {
         &self.addr
     }
 
@@ -52,14 +65,7 @@ impl Inbound for Socks5Inbound {
         Box::new(self.clone())
     }
 
-    async fn handle(
-        &self,
-        mut stream: TokioTcpStream,
-        inbound_tag: Option<String>,
-        outbounds: Arc<Outbounds>,
-        router: Arc<Router>,
-        dns: Arc<DnsManager>,
-    ) -> Result<()> {
+    async fn handle_tcp(&self, mut stream: TokioTcpStream, context: AppContext) -> Result<()> {
         // 1. Handshake
         let request = match HandshakeRequest::read_from(&mut stream).await {
             Ok(r) => r,
@@ -119,20 +125,157 @@ impl Inbound for Socks5Inbound {
         // 3. Handle Command
         match request.command {
             Command::TcpConnect => {
-                let response = TcpResponseHeader::new(Reply::Succeeded, self.addr.clone());
+                let mut down_stream = connect_tcp_host(address, context).await?;
+                let addr = Address::SocketAddress(down_stream.local_addr()?);
+                let response = TcpResponseHeader::new(Reply::Succeeded, addr);
                 response.write_to(&mut stream).await?;
+                let mut stream = Box::new(stream);
+                copy_bidirectional(&mut stream, &mut down_stream)
+                    .await
+                    .map(|_| ())
             }
             Command::UdpAssociate => {
-                todo!("socks5 udp");
+                if !self.udp_enabled {
+                    let response = TcpResponseHeader::new(Reply::CommandNotSupported, address);
+                    response.write_to(&mut stream).await?;
+                    return Ok(());
+                }
+                let response = TcpResponseHeader::new(Reply::Succeeded, self.addr.into());
+                response.write_to(&mut stream).await?;
+
+                // Hold connection until EOF
+                let mut buffer = [0u8; 2048];
+                loop {
+                    let n = stream.read(&mut buffer).await?;
+                    if n == 0 {
+                        break;
+                    }
+                }
+                Ok(())
             }
             Command::TcpBind => {
                 let response = TcpResponseHeader::new(Reply::CommandNotSupported, address);
                 response.write_to(&mut stream).await?;
-                return Err(invalid_data_error("Socks5 tcp bind is not supported"));
+                Err(invalid_data_error("Socks5 tcp bind is not supported"))
             }
         }
-        let mut stream = Box::new(stream);
-        establish_tcp_tunnel(&mut stream, &address, &inbound_tag, outbounds, router, dns).await
+    }
+
+    async fn run_udp_server(&self, context: AppContext) -> Result<()> {
+        let socket = UdpSocket::listen(&self.addr).await?;
+        let socket = Arc::new(socket);
+        let (mut manager, cleanup_interval, mut keepalive_rx) = NatManager::new(
+            Socks5UdpInboundWriter {
+                inbound: socket.clone(),
+            },
+            context,
+        );
+        log::debug!("starting socks5 udp server, listening on: {}", self.addr);
+        let mut buffer = [0u8; MAXIMUM_UDP_PAYLOAD_SIZE];
+        let mut cleanup_timer = interval(cleanup_interval);
+        loop {
+            tokio::select! {
+                recv_result = socket.recv_from(&mut buffer) => {
+                    let (n, peer_addr) = match recv_result {
+                        Ok(s) => s,
+                        Err(err) => {
+                            log::error!("udp server recv_from failed with error: {}", err);
+                            sleep(Duration::from_secs(1)).await;
+                            continue;
+                        }
+                    };
+
+                    let data = &buffer[..n];
+
+                    // PKT = UdpAssociateHeader + PAYLOAD
+                    let mut cur = Cursor::new(data);
+                    let header = match UdpAssociateHeader::read_from(&mut cur).await {
+                        Ok(h) => h,
+                        Err(..) => {
+                            log::error!("received invalid UDP associate packet");
+                            continue;
+                        }
+                    };
+
+                    if header.frag != 0 {
+                        log::error!("received UDP associate with frag != 0, which is not supported");
+                        continue;
+                    }
+
+                    let pos = cur.position() as usize;
+                    let payload = &data[pos..];
+
+                    log::trace!(
+                        "UDP ASSOCIATE {} -> {}, {} bytes",
+                        peer_addr,
+                        header.address,
+                        payload.len()
+                    );
+
+                    if let Err(err) = manager.send_to(peer_addr, header.address, payload).await {
+                        log::error!(
+                            "udp packet from {} relay {} bytes failed, error: {}",
+                            peer_addr,
+                            data.len(),
+                            err
+                        );
+                    }
+                }
+
+                _ = cleanup_timer.tick() => {
+                    // cleanup expired associations. iter() will remove expired elements
+                    manager.cleanup_expired().await;
+                }
+
+                peer_addr_opt = keepalive_rx.recv() => {
+                    let peer_addr = peer_addr_opt.expect("keep-alive channel closed unexpectly");
+                    manager.keep_alive(&peer_addr).await;
+                }
+            }
+        }
+    }
+}
+
+#[derive(Clone)]
+struct Socks5UdpInboundWriter {
+    inbound: Arc<UdpSocket>,
+}
+
+impl UdpInboundWrite for Socks5UdpInboundWriter {
+    async fn send_to(
+        &self,
+        peer_addr: SocketAddr,
+        remote_addr: &Address,
+        data: &[u8],
+    ) -> Result<()> {
+        let remote_addr = match remote_addr {
+            Address::SocketAddress(sa) => {
+                // Try to convert IPv4 mapped IPv6 address if server is running on dual-stack mode
+                let saddr = match *sa {
+                    SocketAddr::V4(..) => *sa,
+                    SocketAddr::V6(ref v6) => match Ipv6Addr::to_ipv4_mapped(v6.ip()) {
+                        Some(v4) => SocketAddr::new(IpAddr::from(v4), v6.port()),
+                        None => *sa,
+                    },
+                };
+
+                Address::SocketAddress(saddr)
+            }
+            daddr => daddr.clone(),
+        };
+
+        // Reassemble packet
+        let mut payload_buffer = BytesMut::new();
+        let header = UdpAssociateHeader::new(0, remote_addr.clone());
+        payload_buffer.reserve(header.serialized_len() + data.len());
+
+        header.write_to_buf(&mut payload_buffer);
+        payload_buffer.put_slice(data);
+
+        self.inbound
+            .send_to(&payload_buffer, peer_addr)
+            .await
+            .map(|_| ())
     }
 }
 
@@ -152,12 +295,14 @@ impl Socks5Outbound {
             connect_opts: ConnectOpts::default(),
         }
     }
-}
-#[async_trait]
-impl Outbound for Socks5Outbound {
-    async fn handle(&self, addr: &Address) -> Result<Box<dyn ProxySteam>> {
-        let server_addr = pre_check_addr!(self.addr);
-        let mut stream = TcpStream::connect_with_opts(server_addr, &self.connect_opts).await?;
+
+    pub async fn connect(
+        &self,
+        addr: &SocketAddr,
+        command: Command,
+        target: Address,
+    ) -> Result<(TcpResponseHeader, TcpStream)> {
+        let mut stream = TcpStream::connect_with_opts(addr, &self.connect_opts).await?;
 
         let mut auth_method = socks5::SOCKS5_AUTH_METHOD_NONE;
         if !self.accounts.is_empty() {
@@ -176,23 +321,15 @@ impl Outbound for Socks5Outbound {
         }
 
         // 2. Send request header
-        let request = TcpRequestHeader::new(Command::TcpConnect, addr.to_owned());
+        let request = TcpRequestHeader::new(command, target);
         request.write_to(&mut stream).await?;
         let response = TcpResponseHeader::read_from(&mut stream).await?;
-
-        match response.reply {
-            Reply::Succeeded => {
-                log::debug!("Connected to socks5 server: {}", response.address);
-                let stream: Box<dyn ProxySteam> = Box::new(stream);
-                Ok(stream)
-            }
-            reply => Err(invalid_data_error(format!(
-                "Sock server reply error: {}",
-                reply
-            ))),
-        }
+        Ok((response, stream))
     }
+}
 
+#[async_trait]
+impl Outbound for Socks5Outbound {
     fn protocol(&self) -> OutboundProtocolOption {
         OutboundProtocolOption::Socks
     }
@@ -206,5 +343,95 @@ impl Outbound for Socks5Outbound {
         } else {
             Ok(None)
         }
+    }
+
+    async fn connect_tcp(&self, addr: Address) -> Result<Box<dyn ProxyStream>> {
+        let server_addr = pre_check_addr!(self.addr);
+        let (response, stream) = self.connect(server_addr, Command::TcpConnect, addr).await?;
+
+        match response.reply {
+            Reply::Succeeded => {
+                log::debug!("Connected to socks5 tcp server: {}", response.address);
+                let stream: Box<dyn ProxyStream> = Box::new(stream);
+                Ok(stream)
+            }
+            reply => Err(invalid_data_error(format!(
+                "Unable to connect to socks, reply error: {}",
+                reply
+            ))),
+        }
+    }
+
+    async fn bind(&self, _peer: SocketAddr, _target: SocketAddr) -> Result<Box<dyn ProxySocket>> {
+        let server_addr = pre_check_addr!(self.addr);
+        let socket = UdpSocket::connect_any_with_opts(server_addr, &self.connect_opts).await?;
+        let addr = socket.local_addr()?;
+        let (response, stream) = self
+            .connect(server_addr, Command::UdpAssociate, addr.into())
+            .await?;
+        match response.reply {
+            Reply::Succeeded => {
+                match response.address {
+                    Address::SocketAddress(addr) => {
+                        socket.connect(addr).await?;
+                    }
+                    Address::DomainNameAddress(_, _) => unimplemented!(),
+                }
+                log::debug!("Connected to socks5 udp server: {}", response.address);
+
+                let socks5_socket = Socks5Socket::new(socket, stream);
+                Ok(Box::new(socks5_socket) as Box<dyn ProxySocket>)
+            }
+            reply => Err(invalid_data_error(format!(
+                "Inable to bind sock, reply error: {}",
+                reply
+            ))),
+        }
+    }
+}
+
+pub struct Socks5Socket {
+    socket: UdpSocket,
+    // Socks5 protocol requires to keep the TcpStream open
+    _stream: TcpStream,
+}
+
+impl Socks5Socket {
+    pub fn new(socket: UdpSocket, _stream: TcpStream) -> Self {
+        Self { socket, _stream }
+    }
+}
+
+impl ProxySocket for Socks5Socket {
+    fn poll_recv_from(&self, cx: &mut Context<'_>, buf: &mut ReadBuf<'_>) -> Poll<Result<Address>> {
+        let mut cache = vec![0u8; buf.remaining()];
+        let mut buffer = ReadBuf::new(cache.as_mut());
+        ready!(self.socket.poll_recv(cx, &mut buffer))?;
+        let cache_len = buffer.filled().len();
+        let mut cur = Cursor::new(buffer.filled());
+        let mut buffer = [0u8; 3];
+        Read::read_exact(&mut cur, &mut buffer)?;
+        //let frag = buffer[2];
+        let address = Address::read_cursor(&mut cur)?;
+        let pos = cur.position() as usize;
+        buf.put_slice(&cache[pos..cache_len]);
+        Ok(address).into()
+    }
+
+    fn poll_send_to(
+        &self,
+        cx: &mut Context<'_>,
+        buf: &[u8],
+        target: Address,
+    ) -> Poll<Result<usize>> {
+        // TODO: support frag
+        let header = UdpAssociateHeader::new(0, target);
+        let header_len = header.serialized_len();
+        let mut send_buf = BytesMut::with_capacity(header.serialized_len() + buf.len());
+        header.write_to_buf(&mut send_buf);
+        send_buf.put_slice(buf);
+        self.socket
+            .poll_send(cx, &send_buf)
+            .map_ok(|n| n.saturating_sub(header_len))
     }
 }

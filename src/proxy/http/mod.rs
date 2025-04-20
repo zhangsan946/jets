@@ -5,10 +5,7 @@ mod utils;
 
 use super::Inbound;
 use crate::app::config::Account;
-use crate::app::dns::DnsManager;
-use crate::app::proxy::Outbounds;
-use crate::app::router::Router;
-use crate::common::Address;
+use crate::app::Context;
 use async_trait::async_trait;
 use http_service::HttpService;
 use hyper::server::conn::http1;
@@ -16,17 +13,17 @@ use hyper::service::service_fn;
 use hyper_util::rt::TokioIo;
 use std::collections::HashMap;
 use std::io::Result;
-use std::sync::Arc;
+use std::net::SocketAddr;
 use tokio::net::TcpStream;
 
 #[derive(Clone, Debug)]
 pub struct HttpInbound {
-    addr: Address,
+    addr: SocketAddr,
     accounts: HashMap<String, String>,
 }
 
 impl HttpInbound {
-    pub fn new(addr: Address, accounts: Vec<Account>) -> Self {
+    pub fn new(addr: SocketAddr, accounts: Vec<Account>) -> Self {
         let accounts: HashMap<_, _> = accounts.into_iter().map(|a| (a.user, a.pass)).collect();
         Self { addr, accounts }
     }
@@ -34,7 +31,7 @@ impl HttpInbound {
 
 #[async_trait]
 impl Inbound for HttpInbound {
-    fn addr(&self) -> &Address {
+    fn addr(&self) -> &SocketAddr {
         &self.addr
     }
 
@@ -42,14 +39,7 @@ impl Inbound for HttpInbound {
         Box::new(self.clone())
     }
 
-    async fn handle(
-        &self,
-        stream: TcpStream,
-        inbound_tag: Option<String>,
-        outbounds: Arc<Outbounds>,
-        router: Arc<Router>,
-        dns: Arc<DnsManager>,
-    ) -> Result<()> {
+    async fn handle_tcp(&self, stream: TcpStream, context: Context) -> Result<()> {
         let peer_addr = stream.peer_addr()?;
         let io = TokioIo::new(stream);
         let _ = http1::Builder::new()
@@ -62,15 +52,16 @@ impl Inbound for HttpInbound {
                     HttpService::new(peer_addr).serve_connection(
                         req,
                         &self.accounts,
-                        inbound_tag.clone(),
-                        outbounds.clone(),
-                        router.clone(),
-                        dns.clone(),
+                        context.clone(),
                     )
                 }),
             )
             .with_upgrades()
             .await;
+        Ok(())
+    }
+
+    async fn run_udp_server(&self, _: Context) -> Result<()> {
         Ok(())
     }
 }
