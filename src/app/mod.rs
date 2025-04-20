@@ -17,7 +17,7 @@ use proxy::{Inbounds, Outbounds};
 use router::Router;
 use std::collections::VecDeque;
 use std::io::{Error, ErrorKind, Result};
-use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::net::TcpStream;
@@ -233,13 +233,14 @@ pub(crate) async fn bind_udp_socket(
 ) -> Result<Box<dyn ProxySocket>> {
     let outbound = context.get_outbound(&address).await?;
     let target = if outbound.protocol() == OutboundProtocolOption::Freedom {
-        context.resolve(&address).await?
+        let addr = context.resolve(&address).await?;
+        Address::SocketAddress(addr)
     } else {
         // For the rest of the protocols, it doesn't matter what the target is
-        SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 0)
+        address
     };
     outbound
-        .bind(peer, target)
+        .bind(peer, target.clone())
         .await
         .map_err(|e| Error::new(e.kind(), format!("Bind to {} failed: {}", target, e)))
 }

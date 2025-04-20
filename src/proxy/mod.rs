@@ -191,7 +191,7 @@ pub trait Outbound: Send + Sync {
     fn protocol(&self) -> OutboundProtocolOption;
     async fn pre_connect(&self, dns: &DnsManager) -> Result<Option<Box<dyn Outbound>>>;
     async fn connect_tcp(&self, addr: Address) -> Result<Box<dyn ProxyStream>>;
-    async fn bind(&self, peer: SocketAddr, target: SocketAddr) -> Result<Box<dyn ProxySocket>>;
+    async fn bind(&self, peer: SocketAddr, target: Address) -> Result<Box<dyn ProxySocket>>;
 }
 
 pub mod request_command {

@@ -26,7 +26,7 @@ impl Outbound for BlackholeOutbound {
         ))
     }
 
-    async fn bind(&self, _peer: SocketAddr, addr: SocketAddr) -> Result<Box<dyn ProxySocket>> {
+    async fn bind(&self, _peer: SocketAddr, addr: Address) -> Result<Box<dyn ProxySocket>> {
         Err(Error::new(
             ErrorKind::WouldBlock,
             format!("{} went into to blackhole", addr),

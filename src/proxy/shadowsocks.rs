@@ -89,7 +89,7 @@ impl Outbound for ShadowsocksOutbound {
         Ok(Box::new(stream) as Box<dyn ProxyStream>)
     }
 
-    async fn bind(&self, _peer: SocketAddr, _target: SocketAddr) -> Result<Box<dyn ProxySocket>> {
+    async fn bind(&self, _peer: SocketAddr, _target: Address) -> Result<Box<dyn ProxySocket>> {
         let socket = SsProxySocket::connect_with_opts(
             self.context.clone(),
             &self.server_config,

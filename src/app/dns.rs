@@ -358,7 +358,8 @@ impl RuntimeProvider for DnsRuntimeProvider {
             // 1. NAT type doesn't matter
             // 2. It is one-time back and forth communication
             // so just pass local_addr to meet the requirement
-            let udp = outbound.bind(local_addr, server_addr).await?;
+            let target = Address::SocketAddress(server_addr);
+            let udp = outbound.bind(local_addr, target).await?;
             Ok(udp)
         })
     }

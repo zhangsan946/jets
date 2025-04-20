@@ -362,7 +362,7 @@ impl Outbound for Socks5Outbound {
         }
     }
 
-    async fn bind(&self, _peer: SocketAddr, _target: SocketAddr) -> Result<Box<dyn ProxySocket>> {
+    async fn bind(&self, _peer: SocketAddr, _target: Address) -> Result<Box<dyn ProxySocket>> {
         let server_addr = pre_check_addr!(self.addr);
         let socket = UdpSocket::connect_any_with_opts(server_addr, &self.connect_opts).await?;
         let addr = socket.local_addr()?;

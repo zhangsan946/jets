@@ -31,9 +31,13 @@ impl Outbound for FreedomOutbound {
         }
     }
 
-    async fn bind(&self, _peer: SocketAddr, target: SocketAddr) -> Result<Box<dyn ProxySocket>> {
-        // TODO: IPv6
-        let socket = UdpSocket::connect_any_with_opts(target, &self.connect_opts).await?;
-        Ok(Box::new(socket) as Box<dyn ProxySocket>)
+    async fn bind(&self, _peer: SocketAddr, target: Address) -> Result<Box<dyn ProxySocket>> {
+        if let Address::SocketAddress(addr) = target {
+            // TODO: IPv6
+            let socket = UdpSocket::connect_any_with_opts(addr, &self.connect_opts).await?;
+            Ok(Box::new(socket) as Box<dyn ProxySocket>)
+        } else {
+            unreachable!()
+        }
     }
 }

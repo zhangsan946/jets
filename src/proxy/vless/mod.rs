@@ -114,7 +114,7 @@ impl Outbound for VlessOutbound {
         )))
     }
 
-    async fn bind(&self, peer: SocketAddr, target: SocketAddr) -> Result<Box<dyn ProxySocket>> {
+    async fn bind(&self, peer: SocketAddr, target: Address) -> Result<Box<dyn ProxySocket>> {
         if target.port() == 443 && self.flow == VlessFlow::XtlsRprxVision {
             return Err(invalid_data_error("XTLS rejected UDP/443 traffic"));
         }
@@ -129,14 +129,14 @@ impl Outbound for VlessOutbound {
             .await?;
 
         // https://github.com/XTLS/Xray-core/discussions/252
-        // TODO: ?
+        // TODO: use mux to proxy none flow UDP packets
         // if request.Command == protocol.RequestCommandUDP && (requestAddons.Flow == vless.XRV || (h.cone && request.Port != 53 && request.Port != 443)) {
         //     request.Command = protocol.RequestCommandMux
         //     request.Address = net.DomainAddress("v1.mux.cool")
         //     request.Port = net.Port(666)
         // }
         let (address, command) = match self.flow {
-            VlessFlow::None => (Address::SocketAddress(target), request_command::UDP),
+            VlessFlow::None => (target.clone(), request_command::UDP),
             _ => (
                 Address::DomainNameAddress("v1.mux.cool".to_string(), 666),
                 request_command::MUX,
@@ -152,10 +152,7 @@ impl Outbound for VlessOutbound {
         stream.write_all(&buffer).await?;
         log::debug!("Writing request header with flow {:?}", self.flow);
         match self.flow {
-            VlessFlow::None => Ok(Box::new(VlessUdpStream::new(
-                stream,
-                Address::SocketAddress(target),
-            ))),
+            VlessFlow::None => Ok(Box::new(VlessUdpStream::new(stream, target))),
             _ => {
                 let stream_id = std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
