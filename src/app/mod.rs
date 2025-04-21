@@ -1,3 +1,4 @@
+pub mod cli;
 pub mod config;
 pub mod dat {
     include!(concat!(env!("OUT_DIR"), "/xray.app.router.rs"));
@@ -23,6 +24,10 @@ use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::net::TcpStream;
 use tokio::runtime::Runtime;
 
+pub mod env_vars {
+    pub const RESOURCES_DIR: &str = "JETS_RESOURCES_DIR";
+}
+
 pub struct App {
     inbounds: Inbounds,
     outbounds: Arc<Outbounds>,
@@ -32,6 +37,8 @@ pub struct App {
 
 impl App {
     pub fn new(config: Config) -> Result<Self> {
+        env_logger::init_from_env(env_logger::Env::new().default_filter_or(config.log.loglevel));
+
         let inbounds = Inbounds::new(config.inbounds)?;
         let mut outbounds = Outbounds::new(config.outbounds)?;
         let router = Router::new(config.routing)?;
@@ -109,9 +116,9 @@ impl App {
                 );
                 let inbound_2 = inbound_1.clone();
                 let context_1 = context.clone();
-                // TODO:
+                // TODO: setup udp server
                 // share backlog setting with tcp server
-                // thread setting
+                // workers config
                 tokio::spawn(async move { inbound_2.run_udp_server(context_1).await });
                 server = server.bind("in", inbound.addr(), move || {
                     let inbound = inbound_1.clone();

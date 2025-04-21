@@ -3,6 +3,7 @@ use serde::ser::Serialize;
 pub use shadowsocks::relay::Address;
 //pub use shadowsocks::relay::tcprelay::utils::copy_bidirectional;
 use std::io::{Error, ErrorKind, Result};
+use std::time::{Duration, Instant};
 use tokio::io::{copy_bidirectional_with_sizes, AsyncRead, AsyncWrite};
 
 /// shadowsocks-rust, xray and tokio copy_bidirectional method all use 8k buffer
@@ -39,6 +40,12 @@ pub fn to_string<T: ?Sized + Serialize + std::fmt::Display>(value: &T) -> String
 // https://users.rust-lang.org/t/finding-a-u8-n-u8-in-a-vec-u8/87648
 pub fn find_str_in_str(src: &[u8], target: &[u8]) -> bool {
     src.windows(target.len()).any(|w| w == target)
+}
+
+// https://github.com/tokio-rs/tokio/blob/365269adaf6ec75743c0693f2378c3c6d04f806b/tokio/src/time/instant.rs#L57-L63
+#[inline]
+pub fn far_future_instant() -> Instant {
+    Instant::now() + Duration::from_secs(86400 * 365 * 30)
 }
 
 pub async fn copy_bidirectional<A, B>(a: &mut A, b: &mut B) -> Result<(u64, u64)>

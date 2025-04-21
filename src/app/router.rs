@@ -1,6 +1,7 @@
 use super::config::{DomainStrategy, RoutingConfig};
 use super::dat::{Cidr, Domain as ProtoDomain, GeoIpList, GeoSiteList};
 use super::dns::DnsManager;
+use super::env_vars::RESOURCES_DIR;
 use super::proxy::Outbounds;
 use crate::common::{invalid_input_error, Address};
 use prost::Message;
@@ -29,13 +30,13 @@ pub struct Router {
 impl Router {
     pub fn new(config: RoutingConfig) -> Result<Self> {
         let geo_ip_list: LazyCell<GeoIpList> = LazyCell::new(|| {
-            let path = PathBuf::from(std::env::var("DAT_DIR").expect("DAT_DIR"));
+            let path = PathBuf::from(std::env::var(RESOURCES_DIR).expect(RESOURCES_DIR));
             let bytes = std::fs::read(path.join("geoip.dat")).expect("geoip.dat");
             GeoIpList::decode(bytes.as_ref()).expect("geo_ip_list")
         });
 
         let geo_site_list: LazyCell<GeoSiteList> = LazyCell::new(|| {
-            let path = PathBuf::from(std::env::var("DAT_DIR").expect("DAT_DIR"));
+            let path = PathBuf::from(std::env::var(RESOURCES_DIR).expect(RESOURCES_DIR));
             let bytes = std::fs::read(path.join("geosite.dat")).expect("geosite.dat");
             GeoSiteList::decode(bytes.as_ref()).expect("geo_site_list")
         });

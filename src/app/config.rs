@@ -1,3 +1,4 @@
+use crate::common::invalid_input_error;
 use crate::impl_display;
 use serde::de::{Deserializer, Error};
 use serde::{Deserialize, Serialize};
@@ -20,22 +21,10 @@ pub struct Config {
 
 impl Config {
     pub fn load<P: AsRef<Path>>(path: P) -> std::io::Result<Self> {
-        let config = fs::read_to_string(path)?;
+        let config = fs::read_to_string(path)
+            .map_err(|e| invalid_input_error(format!("Failed to load config file: {:#}", e)))?;
         Ok(serde_json::from_str(&config)?)
     }
-}
-
-#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "lowercase")]
-pub enum LogLevelOption {
-    Error,
-    #[serde(alias = "warning")]
-    Warn,
-    Info,
-    Debug,
-    Trace,
-    #[serde(alias = "none")]
-    Off,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -43,7 +32,7 @@ pub enum LogLevelOption {
 pub struct LogConfig {
     pub access: Option<String>,
     pub error: Option<String>,
-    pub loglevel: LogLevelOption,
+    pub loglevel: String,
 }
 
 impl Default for LogConfig {
@@ -51,7 +40,7 @@ impl Default for LogConfig {
         Self {
             access: None,
             error: None,
-            loglevel: LogLevelOption::Warn,
+            loglevel: "warn".to_string(),
         }
     }
 }
@@ -70,6 +59,7 @@ pub enum NetworkOption {
 pub enum SecurityOption {
     None,
     Tls,
+    Reality,
 }
 
 #[derive(Clone, Debug, Deserialize)]

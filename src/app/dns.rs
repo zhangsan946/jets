@@ -1,8 +1,9 @@
 use super::config::{DnsConfig, QueryStrategy};
 use super::dat::GeoSiteList;
+use super::env_vars::RESOURCES_DIR;
 use super::router::{Domain, MatchType, Router};
 use crate::app::proxy::Outbounds;
-use crate::common::{invalid_input_error, Address};
+use crate::common::{far_future_instant, invalid_input_error, Address};
 use crate::proxy::{Outbound, ProxySocket, ProxyStream};
 use futures::ready;
 use hickory_resolver::config::{LookupIpStrategy, NameServerConfig, ResolverConfig, ResolverOpts};
@@ -52,10 +53,7 @@ impl DnsManager {
             for domain in domains.into_iter() {
                 match domain.match_type {
                     MatchType::FullDomain(domain) => {
-                        cache.insert(
-                            domain,
-                            (Instant::now() + Duration::MAX, pick_up_ip(ips.clone())?),
-                        );
+                        cache.insert(domain, (far_future_instant(), pick_up_ip(ips.clone())?));
                     }
                     _ => hosts.push((domain, ips.clone())),
                 }
@@ -166,7 +164,7 @@ impl DnsManager {
                 self.cache
                     .write()
                     .await
-                    .insert(domain.clone(), (Instant::now() + Duration::MAX, ip));
+                    .insert(domain.clone(), (far_future_instant(), ip));
                 return Ok(addr);
             }
         }
@@ -246,7 +244,7 @@ impl From<QueryStrategy> for LookupIpStrategy {
 
 fn parse_domain(mut domain: String) -> Result<Vec<Domain>> {
     let geo_site_list: LazyCell<GeoSiteList> = LazyCell::new(|| {
-        let path = PathBuf::from(std::env::var("DAT_DIR").expect("DAT_DIR"));
+        let path = PathBuf::from(std::env::var(RESOURCES_DIR).expect(RESOURCES_DIR));
         let bytes = std::fs::read(path.join("geosite.dat")).expect("geosite.dat");
         GeoSiteList::decode(bytes.as_ref()).expect("geo_site_list")
     });
