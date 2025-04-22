@@ -34,9 +34,15 @@ This project is still in the very early development stage. Welcome anyone intere
 	- ✅ DNS over TCP
 	- ❌ doh/doq/dot
 
+- Transport
+	- ✅ raw
+	- ✅ tls ❌ config, e.g. server name, certificate, ...
+	- ❌ reality
+	- ❌ http, websocket, gprc
+
 - Other
-	- ❌ Connection option && retry && pool
-	- ❌ socks & http auth
+	- ❌ Connection option, e.g. bind interface, tcp fast open, ...
+	- ❌ socks & http authentication
 	- ✅ UDP Full Cone
 	- ❌ fakedns
 	- ❌ more protocols & configurations
