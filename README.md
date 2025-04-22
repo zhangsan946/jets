@@ -1,4 +1,9 @@
 # jets
+
+[![Release](https://github.com/zhangsan946/jets/actions/workflows/release.yml/badge.svg)](https://github.com/zhangsan946/jets/actions/workflows/release.yml)
+[![crates.io](https://img.shields.io/crates/v/jets?logo=rust)](https://crates.io/crates/jets)
+[![docs.rs](https://docs.rs/jets/badge.svg)](https://docs.rs/jets)
+
 A Rust rule-based tunnel targeting to enduser for secure & reliable network access in high speed.
 
 ## Features
