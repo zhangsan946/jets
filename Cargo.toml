@@ -1,6 +1,6 @@
 [package]
 name = "jets"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2021"
 description = "A Rust rule-based tunnel"
 homepage = "https://github.com/zhangsan946/jets"
@@ -10,9 +10,8 @@ authors = ["San Zhang <sanzhang@mail.com>"]
 license = "Apache-2.0"
 readme = "README.md"
 rust-version = "1.80"
-default-run = "sample"
 
-exclude = ["src/bin/**", "rustfmt.toml"]
+exclude = ["src/bin/**", "examples/**", ".github/**"]
 
 [features]
 default = ["local-http"]
@@ -44,7 +43,7 @@ pin-project = { version = "1.1", optional = true }
 prost = "0.13.4"
 rand = "0.9.0"
 regex = "1.11.1"
-rustls = "0.23.23"
+rustls = "0.23.26"
 #rustls-native-certs = "0.8"
 rustls-pki-types = "1.11.0"
 serde = { version = "1.0", features = ["derive"] }

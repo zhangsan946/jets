@@ -39,9 +39,9 @@ This project is still in the very early development stage. Welcome anyone intere
 ## Development
 1. Install protocol compiler by downloading a pre-built binary from [Protocol Buffers releases](https://github.com/protocolbuffers/protobuf/releases).
 2. [Intall Rust 1.80.0+](https://www.rust-lang.org/tools/install).
-3. Run the code.
+3. Run the example code.
 	```Rust
-	cargo run
+	cargo run --example full
 	```
 
 ## Limitation

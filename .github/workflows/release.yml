@@ -1,0 +1,139 @@
+name: Release
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+jobs:
+  build-artifact:
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: 'macos-14'
+            add_dependencies: 'rustup target add x86_64-apple-darwin'
+            extra_args: '--target x86_64-apple-darwin'
+          - platform: 'ubuntu-24.04'
+            add_dependencies: 'rustup target add aarch64-unknown-linux-gnu && sudo apt update && sudo apt-get install gcc-aarch64-linux-gnu g++-aarch64-linux-gnu'
+            extra_args: '--target aarch64-unknown-linux-gnu'
+          - platform: 'windows-2022'
+            add_dependencies: 'rustup target add i686-pc-windows-msvc'
+            extra_args: '--target i686-pc-windows-msvc'
+    runs-on: ${{ matrix.platform }}
+    steps:
+      - name: Install NASM
+        if: runner.os == 'Windows'
+        uses: ilammy/setup-nasm@v1
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Rust setup
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          key: "Cargo.lock"
+          workspaces: '. -> target'
+      
+      - name: Install Protoc
+        uses: arduino/setup-protoc@v3
+        with:
+          version: "29.x"
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Test
+        run: cargo test
+      
+      #- name: Retrieve version
+      - if: runner.os == 'Windows'
+        run: |
+          echo "PKG_VERSION=$(cargo run --bin version)" | Out-File -FilePath $env:GITHUB_ENV -Append
+      - if: runner.os != 'Windows'
+        run: |
+          echo "PKG_VERSION=$(cargo run --bin version)" >> $GITHUB_ENV
+      
+      - name: Add dependencies
+        run: ${{ matrix.add_dependencies }}
+
+      - name: Build
+        run: cargo build --release
+
+      # name: Archive
+      - if: runner.os == 'macOS'
+        run: zip -jr jets-$PKG_VERSION-macos-aarch64.zip target/release/jets
+      - if: runner.os == 'Linux'
+        run: tar -C target/release/ -zcvf jets-$PKG_VERSION-linux-x86_64.tar.gz jets
+      - if: runner.os == 'Windows'
+        run: Compress-Archive -Path target/release/jets.exe -Destination jets-${{ env.PKG_VERSION }}-windows-x86_64.zip
+
+      - name: Extra Build
+        run: cargo build --release ${{ matrix.extra_args }}
+
+      # name: Extra Archive
+      - if: runner.os == 'macOS'
+        run: zip -jr jets-$PKG_VERSION-macos-x86_64.zip target/x86_64-apple-darwin/release/jets
+      - if: runner.os == 'Linux'
+        run: tar -C target/aarch64-unknown-linux-gnu/release/ -zcvf jets-$PKG_VERSION-linux-aarch64.tar.gz jets
+      - if: runner.os == 'Windows'
+        run: Compress-Archive -Path target/i686-pc-windows-msvc/release/jets.exe -Destination jets-${{ env.PKG_VERSION }}-windows-i686.zip
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: jets-artifact-${{ runner.os }}
+          path: |
+            jets-*.zip
+            jets-*.tar.gz
+
+  release:
+    needs: build-artifact
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download artifact
+        uses: actions/download-artifact@v4
+        with:
+          pattern: jets-artifact-*
+          merge-multiple: true
+          path: /tmp/jets-artifact
+      
+      - name: Rust setup
+        uses: dtolnay/rust-toolchain@stable
+      
+      - name: Install Protoc
+        uses: arduino/setup-protoc@v3
+        with:
+          version: "29.x"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      
+      - name: Retrieve version
+        run: |
+          echo "PKG_VERSION=$(cargo run --bin version)" >> $GITHUB_ENV
+
+      - name: Github Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: Jets v${{ env.PKG_VERSION }}
+          body: "Automated release for Jets v${{ env.PKG_VERSION }}"
+          files: /tmp/jets-artifact/*
+          draft: false
+          prerelease: false
+          generate_release_notes: false
+          make_latest: true
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Publish to crates.io
+        run: |
+          cargo publish
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CRATES_IO_TOKEN }}

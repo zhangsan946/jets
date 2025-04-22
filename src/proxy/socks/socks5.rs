@@ -170,7 +170,7 @@ impl Inbound for Socks5Inbound {
             },
             context,
         );
-        log::debug!("starting socks5 udp server, listening on: {}", self.addr);
+        log::info!("starting socks5 udp server, listening on: {}", self.addr);
         let mut buffer = [0u8; MAXIMUM_UDP_PAYLOAD_SIZE];
         let mut cleanup_timer = interval(cleanup_interval);
         loop {
