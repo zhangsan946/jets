@@ -118,7 +118,7 @@ jobs:
       
       - name: Retrieve version
         run: |
-          echo "PKG_VERSION=$(cargo run --bin version)" >> $GITHUB_ENV
+          echo "PKG_VERSION=$(cargo run --bin jets -- -v)" >> $GITHUB_ENV
 
       - name: Github Release
         uses: softprops/action-gh-release@v2
