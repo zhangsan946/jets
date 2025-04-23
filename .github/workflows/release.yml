@@ -52,10 +52,10 @@ jobs:
       #- name: Retrieve version
       - if: runner.os == 'Windows'
         run: |
-          echo "PKG_VERSION=$(cargo run --bin version)" | Out-File -FilePath $env:GITHUB_ENV -Append
+          echo "PKG_VERSION=$(cargo run --bin jets -- -v)" | Out-File -FilePath $env:GITHUB_ENV -Append
       - if: runner.os != 'Windows'
         run: |
-          echo "PKG_VERSION=$(cargo run --bin version)" >> $GITHUB_ENV
+          echo "PKG_VERSION=$(cargo run --bin jets -- -v)" >> $GITHUB_ENV
       
       - name: Add dependencies
         run: ${{ matrix.add_dependencies }}
