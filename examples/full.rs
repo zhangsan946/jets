@@ -18,6 +18,7 @@ fn main() -> std::io::Result<()> {
     // println!("json config: {:?}", config);
 
     let mut config = Config::default();
+    //config.log.error = Some("d:\\error.log".to_string());
     config.log.loglevel = "jets=debug,info".to_string();
 
     let mut socks_inbound = InboundConfig::new_socks("127.0.0.1", 1080);

@@ -17,6 +17,7 @@ use dns::DnsManager;
 use proxy::{Inbounds, Outbounds};
 use router::Router;
 use std::collections::VecDeque;
+use std::fs::OpenOptions;
 use std::io::{Error, ErrorKind, Result};
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -37,7 +38,19 @@ pub struct App {
 
 impl App {
     pub fn new(config: Config) -> Result<Self> {
-        env_logger::init_from_env(env_logger::Env::new().default_filter_or(config.log.loglevel));
+        let mut builder = env_logger::Builder::new();
+        builder.parse_env(env_logger::Env::new().default_filter_or(config.log.loglevel));
+        let target = if let Some(error_file) = config.log.error {
+            let file = OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(error_file)?;
+            env_logger::Target::Pipe(Box::new(file))
+        } else {
+            env_logger::Target::Stdout
+        };
+        builder.target(target);
+        builder.init();
 
         let inbounds = Inbounds::new(config.inbounds)?;
         let mut outbounds = Outbounds::new(config.outbounds)?;
