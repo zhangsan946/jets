@@ -11,6 +11,7 @@ use hickory_resolver::name_server::GenericConnector;
 use hickory_resolver::proto::runtime::iocompat::AsyncIoTokioAsStd;
 use hickory_resolver::proto::runtime::{RuntimeProvider, TokioHandle, TokioTime};
 use hickory_resolver::proto::xfer::Protocol;
+//use hickory_resolver::system_conf::read_system_conf;
 use hickory_resolver::Resolver;
 use prost::Message;
 use regex::Regex;
@@ -67,7 +68,9 @@ impl DnsManager {
         options.edns0 = true;
         options.ip_strategy = LookupIpStrategy::from(config.query_strategy);
 
-        // TODO: Support pre-defined dns config e.g. google/cloudflare/quad9 https/tls,
+        // TODO: Support pre-defined dns config e.g. google/cloudflare/quad9 https/tls
+        // 1. Each pre-defined config have more than one name server, how to handle it?
+        // 2. Shall we add pre-defined IPs to routing to for those servers?
         for server in config.servers {
             let mut resolver_config = ResolverConfig::new();
             let mut routable = true;
@@ -87,7 +90,23 @@ impl DnsManager {
                 resolver_config.add_name_server(name_server);
                 addr
             } else if server.address == "localhost" {
-                todo!("get system dns config")
+                // TODO:
+                // read_system_conf may have duplicated entries or multiple entries
+                // Windows seems to have automatic DNS address as following
+                // [fec0:0:0:ffff::1]:53, [fec0:0:0:ffff::2]:53, [fec0:0:0:ffff::3]:53
+                // how to handle it?
+                todo!("support localhost dns config")
+                // let (config, _) = read_system_conf()?;
+                // if config.name_servers().is_empty() {
+                //     return Err(invalid_input_error(
+                //         "No name servers found in system config",
+                //     ));
+                // }
+                // config.name_servers().iter().for_each(|name_server| {
+                //     println!("localhost name server: {}", name_server.socket_addr);
+                // });
+                // resolver_config = config;
+                // resolver_config.name_servers()[0].socket_addr
             } else {
                 let addr = format!("{}:{}", server.address, server.port);
                 let addr = SocketAddr::from_str(&addr).map_err(|_| {
