@@ -100,11 +100,8 @@ impl DnsManager {
             };
             let outbound = if routable {
                 let rt = Runtime::new()?;
-                let tag = rt.block_on(async {
-                    router
-                        .pick_after_resolve(&dns_server_addr, &config.tag)
-                        .await
-                });
+                let addr = Address::SocketAddress(dns_server_addr);
+                let tag = rt.block_on(async { router.pick_as_is(&addr, &config.tag).await });
                 outbounds.get(&tag).unwrap().clone()
             } else if let Some(ref tag) = config.local_outbound_tag {
                 outbounds

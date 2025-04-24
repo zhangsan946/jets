@@ -75,6 +75,7 @@ fn main() -> std::io::Result<()> {
         .domain
         .append(&mut ["geosite:category-ads-all".to_string()].to_vec());
     config.routing.rules.push(routing_rule);
+    config.routing.domain_strategy = jets::app::config::DomainStrategy::IPIfNonMatch;
 
     let dns_server = DnsServer::new("1.1.1.1".to_string());
     config.dns.servers.push(dns_server);

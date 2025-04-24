@@ -214,31 +214,66 @@ impl Router {
 
     pub async fn pick(
         &self,
-        _dns: &Arc<DnsManager>,
+        dns: &Arc<DnsManager>,
         addr: &Address,
         tag: &Option<String>,
     ) -> Result<String> {
-        // TODO: IPIfNonMatch, IPOnDemand
-        if self.strategy != DomainStrategy::AsIs {
-            let ip = _dns.resolve(addr).await?;
-            log::info!("{} was resolved to {}", addr, ip);
+        if matches!(addr, Address::SocketAddress(_)) || self.strategy == DomainStrategy::AsIs {
+            return Ok(self.pick_as_is(addr, tag).await);
         }
-        Ok(self.pick_internal(addr, tag).await)
+        let key = (addr.clone(), tag.clone());
+        if let Some(v) = self.cache.read().await.get(&key) {
+            log::info!("Route {} to cached tag: {}", addr, v);
+            return Ok(v.to_owned());
+        }
+        let socket_addr =
+            if self.strategy == DomainStrategy::IPOnDemand && !self.ip_sites.is_empty() {
+                let ip = dns.resolve(addr).await?;
+                log::debug!("{} was resolved to {}", addr, ip);
+                Some(ip)
+            } else {
+                None
+            };
+        for rule in self.rules.iter() {
+            if let Some(outbound_tag) =
+                rule.matches(addr, &socket_addr, tag, &self.domain_sites, &self.ip_sites)
+            {
+                log::info!("Route {} to tag: {}", addr, outbound_tag);
+                self.cache.write().await.insert(key, outbound_tag.clone());
+                return Ok(outbound_tag);
+            }
+        }
+        if self.strategy == DomainStrategy::IPIfNonMatch && !self.ip_sites.is_empty() {
+            let ip = dns.resolve(addr).await?;
+            log::debug!("{} was resolved to {}", addr, ip);
+            let ip_addr = Address::SocketAddress(ip);
+            for rule in self.rules.iter() {
+                if let Some(outbound_tag) =
+                    rule.matches(&ip_addr, &None, tag, &self.domain_sites, &self.ip_sites)
+                {
+                    log::info!("Route {} to tag: {}", addr, outbound_tag);
+                    self.cache.write().await.insert(key, outbound_tag.clone());
+                    return Ok(outbound_tag);
+                }
+            }
+        }
+        log::info!("Route {} to the first outbound", addr);
+        self.cache
+            .write()
+            .await
+            .insert(key, DEFAULT_OUTBOUND_TAG.to_string());
+        Ok(DEFAULT_OUTBOUND_TAG.to_string())
     }
 
-    pub async fn pick_after_resolve(&self, addr: &SocketAddr, tag: &Option<String>) -> String {
-        let addr: Address = Address::SocketAddress(*addr);
-        self.pick_internal(&addr, tag).await
-    }
-
-    async fn pick_internal(&self, addr: &Address, tag: &Option<String>) -> String {
+    pub async fn pick_as_is(&self, addr: &Address, tag: &Option<String>) -> String {
         let key = (addr.clone(), tag.clone());
         if let Some(v) = self.cache.read().await.get(&key) {
             log::info!("Route {} to cached tag: {}", addr, v);
             return v.to_owned();
         }
         for rule in self.rules.iter() {
-            if let Some(outbound_tag) = rule.matches(addr, tag, &self.domain_sites, &self.ip_sites)
+            if let Some(outbound_tag) =
+                rule.matches(addr, &None, tag, &self.domain_sites, &self.ip_sites)
             {
                 log::info!("Route {} to tag: {}", addr, outbound_tag);
                 self.cache.write().await.insert(key, outbound_tag.clone());
@@ -265,6 +300,7 @@ impl Rule {
     pub fn matches(
         &self,
         addr: &Address,
+        socket_addr: &Option<SocketAddr>,
         tag: &Option<String>,
         domain_sites: &HashMap<String, Vec<Domain>>,
         ip_sites: &HashMap<String, Vec<IpRange>>,
@@ -304,7 +340,12 @@ impl Rule {
         }
 
         if !self.ips.is_empty() {
-            if let Address::SocketAddress(socket_addr) = addr {
+            if matches!(addr, Address::SocketAddress(_)) || socket_addr.is_some() {
+                let socket_addr = if let Address::SocketAddress(addr) = addr {
+                    addr
+                } else {
+                    &socket_addr.expect("should never happen")
+                };
                 let ip_addr = match socket_addr {
                     SocketAddr::V4(s) => IpAddr::V4(*s.ip()),
                     SocketAddr::V6(s) => IpAddr::V6(*s.ip()),
@@ -531,94 +572,94 @@ mod test {
         assert_eq!(
             proxy_tag,
             router
-                .pick_internal(&Address::from_str("www.facebook.com:0").unwrap(), &None)
+                .pick_as_is(&Address::from_str("www.facebook.com:0").unwrap(), &None)
                 .await
         );
         assert_eq!(
             proxy_tag,
             router
-                .pick_internal(&Address::from_str("www.facebook.com.cn:0").unwrap(), &None)
+                .pick_as_is(&Address::from_str("www.facebook.com.cn:0").unwrap(), &None)
                 .await
         );
         assert_eq!(
             proxy_tag,
             router
-                .pick_internal(&Address::from_str("www.google.com:0").unwrap(), &None)
+                .pick_as_is(&Address::from_str("www.google.com:0").unwrap(), &None)
                 .await
         );
         assert_eq!(
             proxy_tag,
             router
-                .pick_internal(&Address::from_str("fonts.googleapis.com:0").unwrap(), &None)
+                .pick_as_is(&Address::from_str("fonts.googleapis.com:0").unwrap(), &None)
                 .await
         );
         assert_eq!(
             DEFAULT_OUTBOUND_TAG,
             router
-                .pick_internal(&Address::from_str("google.com:0").unwrap(), &None)
+                .pick_as_is(&Address::from_str("google.com:0").unwrap(), &None)
                 .await
         );
         assert_eq!(
             proxy_tag,
             router
-                .pick_internal(&Address::from_str("video.youtube.com:0").unwrap(), &None)
+                .pick_as_is(&Address::from_str("video.youtube.com:0").unwrap(), &None)
                 .await
         );
         assert_eq!(
             proxy_tag,
             router
-                .pick_internal(&Address::from_str("youtube.com:0").unwrap(), &None)
+                .pick_as_is(&Address::from_str("youtube.com:0").unwrap(), &None)
                 .await
         );
         assert_eq!(
             proxy_tag,
             router
-                .pick_internal(&Address::from_str("www.openai.com:0").unwrap(), &None)
+                .pick_as_is(&Address::from_str("www.openai.com:0").unwrap(), &None)
                 .await
         );
         assert_eq!(
             DEFAULT_OUTBOUND_TAG,
             router
-                .pick_internal(&Address::from_str("openai.com:0").unwrap(), &None)
+                .pick_as_is(&Address::from_str("openai.com:0").unwrap(), &None)
                 .await
         );
 
         assert_eq!(
             direct_tag,
             router
-                .pick_internal(&Address::from_str("www.baidu.com:0").unwrap(), &None)
+                .pick_as_is(&Address::from_str("www.baidu.com:0").unwrap(), &None)
                 .await
         );
         assert_eq!(
             direct_tag,
             router
-                .pick_internal(&Address::from_str("baidu.com:0").unwrap(), &None)
+                .pick_as_is(&Address::from_str("baidu.com:0").unwrap(), &None)
                 .await
         );
         assert_eq!(
             direct_tag,
             router
-                .pick_internal(&Address::from_str("www.sina.com:0").unwrap(), &None)
+                .pick_as_is(&Address::from_str("www.sina.com:0").unwrap(), &None)
                 .await
         );
         assert_eq!(
             DEFAULT_OUTBOUND_TAG,
             router
-                .pick_internal(&Address::from_str("www.sina.com.cn:0").unwrap(), &None)
+                .pick_as_is(&Address::from_str("www.sina.com.cn:0").unwrap(), &None)
                 .await
         );
 
         assert_eq!(
             block_tag,
             router
-                .pick_internal(&Address::from_str("www.ads.com:0").unwrap(), &None)
+                .pick_as_is(&Address::from_str("www.ads.com:0").unwrap(), &None)
                 .await
         );
 
         assert_eq!(
             mixed_tag,
             router
-                .pick_internal(
+                .pick_as_is(
                     &Address::from_str("www.wechat.com:0").unwrap(),
                     &Some("inbound1".to_string())
                 )
@@ -628,7 +669,7 @@ mod test {
         assert_eq!(
             DEFAULT_OUTBOUND_TAG,
             router
-                .pick_internal(
+                .pick_as_is(
                     &Address::from_str("www.wechat.com:0").unwrap(),
                     &Some("inbound2".to_string())
                 )
@@ -638,7 +679,7 @@ mod test {
         assert_eq!(
             DEFAULT_OUTBOUND_TAG,
             router
-                .pick_internal(&Address::from_str("www.wechat.com:0").unwrap(), &None,)
+                .pick_as_is(&Address::from_str("www.wechat.com:0").unwrap(), &None,)
                 .await
         );
     }
@@ -678,61 +719,61 @@ mod test {
         assert_eq!(
             proxy_tag,
             router
-                .pick_internal(&Address::from_str("1.32.197.100:0").unwrap(), &None)
+                .pick_as_is(&Address::from_str("1.32.197.100:0").unwrap(), &None)
                 .await
         );
         assert_eq!(
             proxy_tag,
             router
-                .pick_internal(&Address::from_str("8.8.8.8:0").unwrap(), &None)
+                .pick_as_is(&Address::from_str("8.8.8.8:0").unwrap(), &None)
                 .await
         );
         assert_eq!(
             proxy_tag,
             router
-                .pick_internal(&Address::from_str("[fd00::1]:0").unwrap(), &None)
+                .pick_as_is(&Address::from_str("[fd00::1]:0").unwrap(), &None)
                 .await
         );
         assert_eq!(
             proxy_tag,
             router
-                .pick_internal(&Address::from_str("[fd01::1]:0").unwrap(), &None)
+                .pick_as_is(&Address::from_str("[fd01::1]:0").unwrap(), &None)
                 .await
         );
         assert_eq!(
             DEFAULT_OUTBOUND_TAG,
             router
-                .pick_internal(&Address::from_str("1.32.166.1:0").unwrap(), &None)
+                .pick_as_is(&Address::from_str("1.32.166.1:0").unwrap(), &None)
                 .await
         );
         assert_eq!(
             DEFAULT_OUTBOUND_TAG,
             router
-                .pick_internal(&Address::from_str("[fd02::1]:0").unwrap(), &None)
+                .pick_as_is(&Address::from_str("[fd02::1]:0").unwrap(), &None)
                 .await
         );
         assert_eq!(
             direct_tag,
             router
-                .pick_internal(&Address::from_str("5.10.143.100:0").unwrap(), &None)
+                .pick_as_is(&Address::from_str("5.10.143.100:0").unwrap(), &None)
                 .await
         );
         assert_eq!(
             direct_tag,
             router
-                .pick_internal(&Address::from_str("5.10.143.100:0").unwrap(), &None)
+                .pick_as_is(&Address::from_str("5.10.143.100:0").unwrap(), &None)
                 .await
         );
         assert_eq!(
             direct_tag,
             router
-                .pick_internal(&Address::from_str("114.114.114.114:0").unwrap(), &None)
+                .pick_as_is(&Address::from_str("114.114.114.114:0").unwrap(), &None)
                 .await
         );
         assert_eq!(
             block_tag,
             router
-                .pick_internal(&Address::from_str("192.168.16.16:0").unwrap(), &None)
+                .pick_as_is(&Address::from_str("192.168.16.16:0").unwrap(), &None)
                 .await
         );
     }
