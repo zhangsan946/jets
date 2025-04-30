@@ -29,19 +29,19 @@ const VLESS_VERSION: u8 = 0;
 /// ```
 /// ADDON Type: Protobuf
 ///
-pub struct VlessHeaderRequest {
-    addr: Address,
-    id: Uuid,
+pub struct VlessHeaderRequest<'a> {
+    addr: &'a Address,
+    id: &'a Uuid,
     addons: Option<Addons>,
     command: u8,
 }
 
-impl VlessHeaderRequest {
-    pub fn new(addr: Address, id: Uuid, flow: VlessFlow, command: u8) -> Self {
+impl<'a> VlessHeaderRequest<'a> {
+    pub fn new(addr: &'a Address, id: &'a Uuid, flow: &'a VlessFlow, command: u8) -> Self {
         let addons = match flow {
             VlessFlow::None => None,
             _ => Some(Addons {
-                flow: to_string(&flow),
+                flow: to_string(flow),
                 ..Default::default()
             }),
         };
@@ -77,7 +77,7 @@ impl VlessHeaderRequest {
         buf.put_u8(self.command);
         if self.command != request_command::MUX {
             buf.put_u16(self.addr.port());
-            write_address(&self.addr, buf);
+            write_address(self.addr, buf);
         }
     }
 
@@ -90,17 +90,8 @@ impl VlessHeaderRequest {
         if self.command != request_command::MUX {
             1 + 16 + 1 + addon_len + 1
         } else {
-            1 + 16 + 1 + addon_len + 1 + 2 + 1 + get_addr_len(&self.addr)
+            1 + 16 + 1 + addon_len + 1 + self.addr.serialized_len()
         }
-    }
-}
-
-#[inline]
-fn get_addr_len(addr: &Address) -> usize {
-    match *addr {
-        Address::SocketAddress(SocketAddr::V4(..)) => 4,
-        Address::SocketAddress(SocketAddr::V6(..)) => 16,
-        Address::DomainNameAddress(ref dmname, _) => 1 + dmname.len(),
     }
 }
 
@@ -387,11 +378,15 @@ where
         ready!(Pin::new(&mut *stream).poll_read_exact(cx, &mut buffer))?;
         let len = ((buffer[0] as usize) << 8) | (buffer[1] as usize);
         log::debug!("Content length: {}", len);
-        let mut buffer = vec![0u8; len].into_boxed_slice();
-        ready!(Pin::new(&mut *stream).poll_read_exact(cx, &mut buffer))?;
-        buf.put_slice(&buffer);
-
-        Ok(self.target.clone()).into()
+        if buf.capacity() < len {
+            return Err(Error::new(ErrorKind::Interrupted, "Small buffer")).into();
+        }
+        Pin::new(&mut *stream)
+            .poll_read_exact(cx, buf.initialize_unfilled_to(len))
+            .map_ok(|_| {
+                buf.set_filled(len);
+                self.target.clone()
+            })
     }
 
     fn poll_send_to(
@@ -496,9 +491,9 @@ impl MuxCoolLong {
     /// Get length of bytes
     pub fn serialized_len(&self) -> usize {
         if self.global_id.is_some() {
-            2 + 1 + 1 + 1 + 2 + 1 + get_addr_len(&self.addr) + 8
+            2 + 1 + 1 + 1 + self.addr.serialized_len() + 8
         } else {
-            2 + 1 + 1 + 1 + 2 + 1 + get_addr_len(&self.addr)
+            2 + 1 + 1 + 1 + self.addr.serialized_len()
         }
     }
 
@@ -627,11 +622,15 @@ where
                     let mut buffer = [0u8; 2];
                     ready!(stream.poll_read_exact(cx, &mut buffer))?;
                     let len = ((buffer[0] as usize) << 8) | (buffer[1] as usize);
-                    let mut buffer = vec![0u8; len].into_boxed_slice();
-                    ready!(stream.poll_read_exact(cx, &mut buffer))?;
-
-                    buf.put_slice(&buffer);
-                    return Ok(mux_cool.addr).into();
+                    if buf.capacity() < len {
+                        return Err(Error::new(ErrorKind::Interrupted, "Small buffer")).into();
+                    }
+                    return Pin::new(&mut *stream)
+                        .poll_read_exact(cx, buf.initialize_unfilled_to(len))
+                        .map_ok(|_| {
+                            buf.set_filled(len);
+                            mux_cool.addr
+                        });
                 }
                 mux_command::KEEP_ALIVE => {
                     continue;

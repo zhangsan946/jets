@@ -98,8 +98,7 @@ impl Outbound for VlessOutbound {
             .expect("System time is earlier than UNIX_EPOCH")
             .as_millis() as u32;
 
-        let request =
-            VlessHeaderRequest::new(addr.clone(), self.id, self.flow, request_command::TCP);
+        let request = VlessHeaderRequest::new(&addr, &self.id, &self.flow, request_command::TCP);
         let mut buffer = BytesMut::with_capacity(request.serialized_len());
         request.write_to_buf(&mut buffer);
         stream.write_all(&buffer).await?;
@@ -146,7 +145,7 @@ impl Outbound for VlessOutbound {
             VlessFlow::XtlsRprxVisionUdp => VlessFlow::XtlsRprxVision,
             val => val,
         };
-        let request = VlessHeaderRequest::new(address, self.id, flow, command);
+        let request = VlessHeaderRequest::new(&address, &self.id, &flow, command);
         let mut buffer = BytesMut::with_capacity(request.serialized_len());
         request.write_to_buf(&mut buffer);
         stream.write_all(&buffer).await?;

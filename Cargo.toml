@@ -14,13 +14,10 @@ rust-version = "1.80"
 exclude = ["src/bin/**", "examples/**", ".github/**"]
 
 [features]
-default = ["local-http"]
+default = ["inbound-http", "outbound-trojan"]
 
-local-http = [
-    "lru_time_cache",
-    "pin-project",
-    "tokio-rustls",
-]
+inbound-http = ["pin-project", "tokio-rustls"]
+outbound-trojan = ["hex", "sha2"]
 
 [dependencies]
 actix-rt = "2.10"
@@ -37,9 +34,8 @@ http-body-util  = "0.1"
 hickory-resolver = "0.25"
 hyper-util = { version = "0.1", features = ["full"] }
 log = "0.4"
-lru_time_cache = { version = "0.11", optional = true }
+lru_time_cache = { version = "0.11" }
 once_cell = "1.20"
-pin-project = { version = "1.1", optional = true }
 prost = "0.13.4"
 rand = "0.9.0"
 regex = "1.11.1"
@@ -51,10 +47,17 @@ serde_json = "1.0"
 shadowsocks = { version = "1.23.0", features = ["aead-cipher-2022", "security-replay-attack-detect"] }
 shadowsocks-crypto = { version = "0.6.0", default-features = false }
 tokio = { version = "1", features = ["net", "io-util", "macros", "sync"] }
-tokio-rustls = { version = "0.26", optional = true, default-features = false }
 trait-variant = "0.1"
 uuid = {version = "1.13.1", features = ["v5"]}
 webpki-roots = "0.26.8"
+
+# http inbound
+pin-project = { version = "1.1", optional = true }
+tokio-rustls = { version = "0.26", optional = true, default-features = false }
+
+# trojan outbound
+hex = { version = "0.4", optional = true }
+sha2 = { version = "0.10", optional = true }
 
 [build-dependencies]
 prost-build = "0.13.4"

@@ -179,7 +179,7 @@ impl InboundConfig {
         Self::new(listen, port, InboundProtocolOption::Socks)
     }
 
-    #[cfg(feature = "local-http")]
+    #[cfg(feature = "inbound-http")]
     pub fn new_http<S: Into<String>>(listen: S, port: u16) -> Self {
         Self::new(listen, port, InboundProtocolOption::Http)
     }
@@ -192,6 +192,7 @@ pub enum OutboundProtocolOption {
     Freedom,
     Shadowsocks,
     Socks,
+    Trojan,
     Vless,
 }
 
@@ -234,8 +235,6 @@ pub struct VlessUser {
     pub encryption: VlessEncryptionOption,
     #[serde(default)]
     pub flow: VlessFlow,
-    #[serde(default)]
-    pub level: u16,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -251,8 +250,6 @@ pub struct VlessServer {
 pub struct SocksUser {
     pub user: String,
     pub pass: String,
-    #[serde(default)]
-    pub level: u16,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -281,21 +278,30 @@ pub struct ShadowsocksServer {
     pub method: CipherKind,
     pub password: String,
     pub uot: bool,
-    #[serde(default)]
-    pub level: u16,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TrojanServer {
+    pub address: String,
+    pub port: u16,
+    pub password: String,
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]
 #[serde(untagged, rename_all = "camelCase")]
 pub enum OutboundSettings {
-    Vless {
-        vnext: Vec<VlessServer>,
+    Shadowsocks {
+        servers: Vec<ShadowsocksServer>,
     },
     Socks {
         servers: Vec<SocksServer>,
     },
-    Shadowsocks {
-        servers: Vec<ShadowsocksServer>,
+    Trojan {
+        servers: Vec<TrojanServer>,
+    },
+    Vless {
+        vnext: Vec<VlessServer>,
     },
     #[default]
     None,
@@ -352,7 +358,19 @@ impl OutboundConfig {
                 method,
                 password: password.to_string(),
                 uot: false,
-                level: 0,
+            }],
+        };
+        outbound
+    }
+
+    #[cfg(feature = "outbound-trojan")]
+    pub fn new_trojan<S: Into<String>>(addr: S, port: u16, password: S) -> Self {
+        let mut outbound = Self::new(OutboundProtocolOption::Trojan);
+        outbound.settings = OutboundSettings::Trojan {
+            servers: vec![TrojanServer {
+                address: addr.into(),
+                port,
+                password: password.into(),
             }],
         };
         outbound
@@ -368,7 +386,6 @@ impl OutboundConfig {
                     id: uuid_from_str(id),
                     encryption: VlessEncryptionOption::None,
                     flow,
-                    level: 0,
                 }],
             }],
         };

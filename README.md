@@ -21,7 +21,7 @@ This project is still in the very early development stage. Welcome anyone intere
 	- socks(✅ socks5)
 	- vless(✅ v2fly, ✅ xtls)
 	- ✅ shadowsocks
-	- ❌ trojan
+	- ✅ trojan
 	- ❌ vmess
 
 - Routing

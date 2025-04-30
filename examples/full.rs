@@ -41,6 +41,11 @@ fn main() -> std::io::Result<()> {
     //     jets::app::config::CipherKind::AEAD2022_BLAKE3_AES_256_GCM,
     //     "ss_pass",
     // ));
+    // config.outbounds.push(OutboundConfig::new_trojan(
+    //     "trojan_server",
+    //     1234,
+    //     "trojan_password",
+    // ));
     // config.outbounds.push(OutboundConfig::new_vless(
     //     "vless_server",
     //     1234,

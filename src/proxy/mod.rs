@@ -1,10 +1,12 @@
 pub mod blackhole;
 pub mod freedom;
-#[cfg(feature = "local-http")]
+#[cfg(feature = "inbound-http")]
 pub mod http;
 pub mod net_manager;
 pub mod shadowsocks;
 pub mod socks;
+#[cfg(feature = "outbound-trojan")]
+pub mod trojan;
 pub mod vless;
 
 use crate::app::config::OutboundProtocolOption;
@@ -194,18 +196,17 @@ pub trait Outbound: Send + Sync {
     async fn bind(&self, peer: SocketAddr, target: Address) -> Result<Box<dyn ProxySocket>>;
 }
 
+// for vmess & vless
 pub mod request_command {
     pub const TCP: u8 = 1;
     pub const UDP: u8 = 2;
     pub const MUX: u8 = 3;
 }
-
 pub mod address_type {
     pub const IPV4: u8 = 1;
     pub const DOMAIN: u8 = 2;
     pub const IPV6: u8 = 3;
 }
-
 pub mod mux_command {
     pub const NEW: u8 = 1;
     pub const KEEP: u8 = 2;

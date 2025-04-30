@@ -4,8 +4,10 @@ use super::config::{
 };
 use super::router::DEFAULT_OUTBOUND_TAG;
 use crate::common::{invalid_input_error, Address};
-#[cfg(feature = "local-http")]
+#[cfg(feature = "inbound-http")]
 use crate::proxy::http::HttpInbound;
+#[cfg(feature = "outbound-trojan")]
+use crate::proxy::trojan::TrojanOutbound;
 use crate::proxy::{
     blackhole::BlackholeOutbound,
     freedom::FreedomOutbound,
@@ -124,7 +126,7 @@ impl Outbounds {
 
 fn parse_inbound(inbound: InboundConfig) -> Result<Box<dyn Inbound>> {
     match inbound.protocol {
-        #[cfg(feature = "local-http")]
+        #[cfg(feature = "inbound-http")]
         InboundProtocolOption::Http => {
             let addr = format!("{}:{}", inbound.listen, inbound.port);
             let addr = SocketAddr::from_str(&addr).map_err(|_| invalid_input_error(addr))?;
@@ -136,10 +138,10 @@ fn parse_inbound(inbound: InboundConfig) -> Result<Box<dyn Inbound>> {
             let http_inbound = HttpInbound::new(addr, accounts);
             Ok(Box::new(http_inbound) as Box<dyn Inbound>)
         }
-        #[cfg(not(feature = "local-http"))]
+        #[cfg(not(feature = "inbound-http"))]
         InboundProtocolOption::Http => Err(Error::new(
             ErrorKind::Unsupported,
-            "Found http inbound but local-http is not enabled",
+            "Found http inbound but inbound-http is not enabled",
         )),
         InboundProtocolOption::Socks => {
             let addr = format!("{}:{}", inbound.listen, inbound.port);
@@ -166,18 +168,6 @@ fn parse_outbound(outbound: OutboundConfig) -> Result<Box<dyn Outbound>> {
         OutboundProtocolOption::Freedom => {
             Ok(Box::new(FreedomOutbound::default()) as Box<dyn Outbound>)
         }
-        OutboundProtocolOption::Socks => {
-            if let OutboundSettings::Socks { mut servers } = outbound.settings {
-                if !servers.is_empty() {
-                    let server = servers.remove(0);
-                    let addr = format!("{}:{}", server.address, server.port);
-                    let addr = Address::from_str(&addr).map_err(|_| invalid_input_error(addr))?;
-                    let outbound = Socks5Outbound::new(addr, server.users);
-                    return Ok(Box::new(outbound) as Box<dyn Outbound>);
-                }
-            }
-            Err(invalid_input_error("Invalid socks outbound"))
-        }
         OutboundProtocolOption::Shadowsocks => {
             if let OutboundSettings::Shadowsocks { mut servers } = outbound.settings {
                 if !servers.is_empty() {
@@ -190,6 +180,40 @@ fn parse_outbound(outbound: OutboundConfig) -> Result<Box<dyn Outbound>> {
             }
             Err(invalid_input_error("Invalid shadowsocks outbound"))
         }
+        OutboundProtocolOption::Socks => {
+            if let OutboundSettings::Socks { mut servers } = outbound.settings {
+                if !servers.is_empty() {
+                    let server = servers.remove(0);
+                    let addr = format!("{}:{}", server.address, server.port);
+                    let addr = Address::from_str(&addr).map_err(|_| invalid_input_error(addr))?;
+                    let outbound = Socks5Outbound::new(addr, server.users);
+                    return Ok(Box::new(outbound) as Box<dyn Outbound>);
+                }
+            }
+            Err(invalid_input_error("Invalid socks outbound"))
+        }
+        #[cfg(feature = "outbound-trojan")]
+        OutboundProtocolOption::Trojan => {
+            if let OutboundSettings::Trojan { mut servers } = outbound.settings {
+                if !servers.is_empty() {
+                    let server = servers.remove(0);
+                    let addr = format!("{}:{}", server.address, server.port);
+                    let addr = Address::from_str(&addr).map_err(|_| invalid_input_error(addr))?;
+                    let outbound = TrojanOutbound::new(
+                        addr,
+                        server.password,
+                        outbound.stream_settings.tls_settings,
+                    )?;
+                    return Ok(Box::new(outbound) as Box<dyn Outbound>);
+                }
+            }
+            Err(invalid_input_error("Invalid trojan outbound"))
+        }
+        #[cfg(not(feature = "outbound-trojan"))]
+        OutboundProtocolOption::Trojan => Err(Error::new(
+            ErrorKind::Unsupported,
+            "Found trojan outbound but outbound-trojan is not enabled",
+        )),
         OutboundProtocolOption::Vless => {
             if let OutboundSettings::Vless { mut vnext } = outbound.settings {
                 if !vnext.is_empty() && !vnext[0].users.is_empty() {
