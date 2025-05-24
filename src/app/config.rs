@@ -1,12 +1,16 @@
-use crate::common::invalid_input_error;
+use crate::common::{invalid_input_error, TCP_DEFAULT_KEEPALIVE_TIMEOUT};
 use crate::impl_display;
+use crate::transport::raw::{AcceptOpts, ConnectOpts, TcpSocketOpts, UdpSocketOpts};
 use serde::de::{Deserializer, Error};
 use serde::{Deserialize, Serialize};
 pub use shadowsocks_crypto::kind::CipherKind;
 use std::collections::HashMap;
 use std::fs;
+use std::io::{Error as IoError, Result as IoResult};
+use std::net::SocketAddr;
 use std::path::Path;
 use std::str::FromStr;
+use std::time::Duration;
 use uuid::Uuid;
 
 #[derive(Clone, Debug, Default, Deserialize)]
@@ -20,7 +24,7 @@ pub struct Config {
 }
 
 impl Config {
-    pub fn load<P: AsRef<Path>>(path: P) -> std::io::Result<Self> {
+    pub fn load<P: AsRef<Path>>(path: P) -> IoResult<Self> {
         let config = fs::read_to_string(path)
             .map_err(|e| invalid_input_error(format!("Failed to load config file: {:#}", e)))?;
         Ok(serde_json::from_str(&config)?)
@@ -80,10 +84,113 @@ impl Default for TlsSettings {
 
 #[derive(Clone, Debug, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
+pub struct SocketOption {
+    pub mark: Option<u32>,
+    pub interface: Option<String>,
+    pub bind_addr: Option<String>,
+    pub tcp_keep_alive_interval: Option<u32>,
+    pub tcp_fast_open: bool,
+    pub tcp_no_delay: bool,
+    pub tcp_mptcp: bool,
+    pub tcp_send_buffer_size: Option<u32>,
+    pub tcp_recv_buffer_size: Option<u32>,
+    pub udp_mtu: Option<usize>,
+    pub udp_fragment: bool,
+    pub v6_only: bool,
+}
+
+impl Default for SocketOption {
+    fn default() -> Self {
+        Self {
+            mark: None,
+            interface: None,
+            bind_addr: None,
+            // https://github.com/shadowsocks/shadowsocks-rust/blob/22791eed3cb32425fed831c44f8bb644051c74ce/crates/shadowsocks-service/src/local/mod.rs#L148
+            // https://github.com/shadowsocks/shadowsocks-rust/blob/22791eed3cb32425fed831c44f8bb644051c74ce/crates/shadowsocks-service/src/local/mod.rs#L162
+            tcp_keep_alive_interval: Some(TCP_DEFAULT_KEEPALIVE_TIMEOUT.as_secs() as u32),
+            tcp_fast_open: false,
+            tcp_no_delay: false,
+            tcp_mptcp: false,
+            tcp_send_buffer_size: None,
+            tcp_recv_buffer_size: None,
+            udp_mtu: None,
+            udp_fragment: false,
+            v6_only: false,
+        }
+    }
+}
+
+impl From<SocketOption> for TcpSocketOpts {
+    fn from(value: SocketOption) -> Self {
+        TcpSocketOpts {
+            send_buffer_size: value.tcp_send_buffer_size,
+            recv_buffer_size: value.tcp_recv_buffer_size,
+            nodelay: value.tcp_no_delay,
+            fastopen: value.tcp_fast_open,
+            keepalive: value
+                .tcp_keep_alive_interval
+                .map(|v| Duration::from_secs(v as u64)),
+            mptcp: value.tcp_mptcp,
+        }
+    }
+}
+
+impl From<SocketOption> for UdpSocketOpts {
+    fn from(value: SocketOption) -> Self {
+        UdpSocketOpts {
+            mtu: value.udp_mtu,
+            allow_fragmentation: value.udp_fragment,
+        }
+    }
+}
+
+impl From<SocketOption> for AcceptOpts {
+    fn from(value: SocketOption) -> Self {
+        let tcp = TcpSocketOpts::from(value.clone());
+        let udp = UdpSocketOpts::from(value.clone());
+        AcceptOpts {
+            tcp,
+            udp,
+            ipv6_only: value.v6_only,
+        }
+    }
+}
+
+impl TryFrom<SocketOption> for ConnectOpts {
+    type Error = IoError;
+    fn try_from(value: SocketOption) -> IoResult<Self> {
+        let tcp = TcpSocketOpts::from(value.clone());
+        let udp = UdpSocketOpts::from(value.clone());
+        let bind_local_addr =
+            if let Some(addr) = value.bind_addr {
+                Some(SocketAddr::from_str(&addr).map_err(|_| {
+                    invalid_input_error(format!("Invalid socket address: {}", addr))
+                })?)
+            } else {
+                None
+            };
+        Ok(ConnectOpts {
+            #[cfg(any(target_os = "linux", target_os = "android"))]
+            fwmark: value.mark,
+            #[cfg(target_os = "freebsd")]
+            user_cookie: None,
+            #[cfg(target_os = "android")]
+            vpn_protect_path: None,
+            bind_local_addr,
+            bind_interface: value.interface,
+            tcp,
+            udp,
+        })
+    }
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
 pub struct StreamSettings {
     pub network: NetworkOption,
     pub security: SecurityOption,
     pub tls_settings: TlsSettings,
+    pub sockopt: SocketOption,
 }
 
 impl Default for StreamSettings {
@@ -92,6 +199,7 @@ impl Default for StreamSettings {
             network: NetworkOption::Tcp,
             security: SecurityOption::None,
             tls_settings: TlsSettings::default(),
+            sockopt: SocketOption::default(),
         }
     }
 }
@@ -101,6 +209,7 @@ impl Default for StreamSettings {
 pub enum InboundProtocolOption {
     Socks,
     Http,
+    Tun,
 }
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq)]
@@ -132,13 +241,29 @@ pub enum InboundSettings {
         #[serde(default)]
         accounts: Vec<Account>,
     },
+    Tun {
+        name: String,
+        #[serde(default)]
+        address: Option<String>,
+        #[serde(default)]
+        destination: Option<String>,
+    },
     #[default]
     None,
 }
 
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Hash)]
+#[serde(rename_all = "lowercase", untagged)]
+pub enum DestOverrideOption {
+    Http,
+    Tls,
+}
+
 #[derive(Clone, Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Sniffing {
     pub enabled: bool,
+    pub dest_override: Vec<DestOverrideOption>,
 }
 
 fn default_listen() -> String {
@@ -182,6 +307,19 @@ impl InboundConfig {
     #[cfg(feature = "inbound-http")]
     pub fn new_http<S: Into<String>>(listen: S, port: u16) -> Self {
         Self::new(listen, port, InboundProtocolOption::Http)
+    }
+
+    #[cfg(feature = "inbound-tun")]
+    pub fn new_tun<S: Into<String>>(name: S, address: Option<S>, destination: Option<S>) -> Self {
+        let mut inbound = Self::new("0.0.0.0", 0, InboundProtocolOption::Tun);
+        inbound.settings = InboundSettings::Tun {
+            name: name.into(),
+            address: address.map(|s| s.into()),
+            destination: destination.map(|s| s.into()),
+        };
+        inbound.sniffing.enabled = true;
+        inbound.sniffing.dest_override = vec![DestOverrideOption::Tls, DestOverrideOption::Http];
+        inbound
     }
 }
 

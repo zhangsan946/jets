@@ -1,6 +1,9 @@
 use crate::common::Address;
 use crate::proxy::{LocalAddr, ProxySocket};
-pub use shadowsocks::net::{ConnectOpts, TcpStream, UdpSocket};
+// For inbound
+pub use shadowsocks::net::{AcceptOpts, TcpListener};
+// For outbound
+pub use shadowsocks::net::{ConnectOpts, TcpSocketOpts, TcpStream, UdpSocket, UdpSocketOpts};
 use std::io::Result;
 use std::net::SocketAddr;
 use std::task::{Context, Poll};

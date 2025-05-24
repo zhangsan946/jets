@@ -6,24 +6,25 @@ pub mod dat {
 pub mod dns;
 pub mod proxy;
 pub mod router;
+pub mod sniff;
+pub mod utils;
 
 use crate::app::config::OutboundProtocolOption;
-use crate::common::{copy_bidirectional, invalid_input_error, Address};
+use crate::common::{copy_bidirectional, invalid_data_error, invalid_input_error, Address};
 use crate::proxy::{Outbound, ProxySocket, ProxyStream};
-use actix_server::Server;
-use actix_service::fn_service;
 pub use config::Config;
 use dns::DnsManager;
+use futures::{future, FutureExt};
 use proxy::{Inbounds, Outbounds};
 use router::Router;
 use std::collections::VecDeque;
 use std::fs::OpenOptions;
-use std::io::{Error, ErrorKind, Result};
+use std::io::{Error, Result};
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::io::{AsyncRead, AsyncWrite};
-use tokio::net::TcpStream;
 use tokio::runtime::Runtime;
+use utils::{create_abort_signal, ServerHandle};
 
 pub mod env_vars {
     pub const RESOURCES_DIR: &str = "JETS_RESOURCES_DIR";
@@ -115,62 +116,52 @@ impl App {
         let dns = self.dns.clone();
         let inbounds = self.inbounds.iter();
 
-        actix_rt::System::new().block_on(async move {
-            let mut server = Server::build();
-            server = server.backlog(4096);
+        //let mut builder = tokio::runtime::Builder::new_current_thread();
+        //let rt = builder.enable_all().build()?;
+        let rt = Runtime::new()?;
 
-            for (tag, inbound) in inbounds {
-                let inbound_1 = inbound.to_owned();
-                let context = Context::new(
-                    tag.to_owned(),
-                    outbounds.clone(),
-                    router.clone(),
-                    dns.clone(),
-                );
-                let inbound_2 = inbound_1.clone();
-                let context_1 = context.clone();
-                // TODO: setup udp server
-                // share backlog setting with tcp server
-                // workers config
-                tokio::spawn(async move { inbound_2.run_udp_server(context_1).await });
-                server = server.bind("in", inbound.addr(), move || {
-                    let inbound = inbound_1.clone();
-                    let context = context.clone();
-                    fn_service(move |stream: TcpStream| {
-                        let inbound = inbound.clone();
-                        let context = context.clone();
-                        async move {
-                            let peer_addr = stream.peer_addr()?;
-                            let local_addr = stream.local_addr()?;
-                            log::debug!("{} -> {}", peer_addr, local_addr);
-                            match inbound.handle_tcp(stream, context).await {
-                                Ok(_) => Ok(()),
-                                Err(e) if e.kind() == ErrorKind::WouldBlock => {
-                                    log::info!(
-                                        "{} to inbound {} blocked: {:#}",
-                                        peer_addr,
-                                        inbound.addr(),
-                                        e
-                                    );
-                                    Ok(())
-                                }
-                                Err(e) => {
-                                    log::error!(
-                                        "{} to Inbound {} failed: {:#}",
-                                        peer_addr,
-                                        inbound.addr(),
-                                        e
-                                    );
-                                    Err(e)
-                                }
-                            }
-                        }
-                    })
-                })?;
+        let future = async move {
+            let server = async move {
+                let mut vfut = Vec::new();
+                for (tag, inbound) in inbounds {
+                    let inbound = inbound.to_owned();
+                    let context = Context::new(
+                        tag.to_owned(),
+                        outbounds.clone(),
+                        router.clone(),
+                        dns.clone(),
+                    );
+                    vfut.push(ServerHandle(tokio::spawn(async move {
+                        inbound.run(context).await
+                    })));
+                }
+                let (res, ..) = future::select_all(vfut).await;
+                res
+            };
+
+            let abort_signal = create_abort_signal().fuse();
+            let server = server.fuse();
+            tokio::pin!(abort_signal);
+            tokio::pin!(server);
+
+            futures::select! {
+                result = server => {
+                    match result {
+                        // Server future resolved without an error. This should never happen.
+                        Ok(..) => Err(invalid_data_error("server exited unexpectedly")),
+                        // Server future resolved with error, which are listener errors in most cases
+                        Err(err) => Err(invalid_data_error(format!("server aborted with error: {err}"))),
+                    }
+                }
+                // The abort signal future resolved. Means we should just exit.
+                _ = abort_signal => {
+                    log::info!("SIGINT received; starting forced shutdown");
+                    Ok(())
+                }
             }
+        };
 
-            server.run().await
-        })
+        rt.block_on(future)
     }
 }
 

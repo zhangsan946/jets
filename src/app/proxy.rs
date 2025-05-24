@@ -3,6 +3,7 @@ use super::config::{
     OutboundSettings,
 };
 use super::router::DEFAULT_OUTBOUND_TAG;
+use super::sniff::Sniffer;
 use crate::common::{invalid_input_error, Address};
 #[cfg(feature = "inbound-http")]
 use crate::proxy::http::HttpInbound;
@@ -13,9 +14,11 @@ use crate::proxy::{
     freedom::FreedomOutbound,
     shadowsocks::ShadowsocksOutbound,
     socks::{Socks5Outbound, SocksInbound},
+    tun::TunInbound,
     vless::VlessOutbound,
 };
 use crate::proxy::{Inbound, Outbound};
+use crate::transport::raw::{AcceptOpts, ConnectOpts};
 use std::collections::{HashMap, HashSet};
 use std::io::{Error, ErrorKind, Result};
 use std::net::SocketAddr;
@@ -125,6 +128,7 @@ impl Outbounds {
 }
 
 fn parse_inbound(inbound: InboundConfig) -> Result<Box<dyn Inbound>> {
+    let accept_opts = AcceptOpts::from(inbound.stream_settings.sockopt);
     match inbound.protocol {
         #[cfg(feature = "inbound-http")]
         InboundProtocolOption::Http => {
@@ -135,7 +139,7 @@ fn parse_inbound(inbound: InboundConfig) -> Result<Box<dyn Inbound>> {
             } else {
                 Vec::new()
             };
-            let http_inbound = HttpInbound::new(addr, accounts);
+            let http_inbound = HttpInbound::new(addr, accounts, accept_opts);
             Ok(Box::new(http_inbound) as Box<dyn Inbound>)
         }
         #[cfg(not(feature = "inbound-http"))]
@@ -156,17 +160,39 @@ fn parse_inbound(inbound: InboundConfig) -> Result<Box<dyn Inbound>> {
             } else {
                 (Vec::new(), false)
             };
-            let socks_inbound = SocksInbound::new(addr, accounts, udp_enabled);
+            let socks_inbound = SocksInbound::new(addr, accounts, udp_enabled, accept_opts);
             Ok(Box::new(socks_inbound) as Box<dyn Inbound>)
         }
+        #[cfg(feature = "inbound-tun")]
+        InboundProtocolOption::Tun => {
+            if let InboundSettings::Tun {
+                name,
+                address,
+                destination,
+            } = inbound.settings
+            {
+                let sniffer = Sniffer::from(inbound.sniffing);
+                let tun_inbound =
+                    TunInbound::new(name, address, destination, accept_opts, sniffer)?;
+                Ok(Box::new(tun_inbound) as Box<dyn Inbound>)
+            } else {
+                Err(invalid_input_error("invalid tun inbound settings"))
+            }
+        }
+        #[cfg(not(feature = "inbound-tun"))]
+        InboundProtocolOption::Tun => Err(Error::new(
+            ErrorKind::Unsupported,
+            "Found tun inbound but inbound-tun is not enabled",
+        )),
     }
 }
 
 fn parse_outbound(outbound: OutboundConfig) -> Result<Box<dyn Outbound>> {
+    let connect_opts = ConnectOpts::try_from(outbound.stream_settings.sockopt)?;
     match outbound.protocol {
         OutboundProtocolOption::Blackhole => Ok(Box::new(BlackholeOutbound) as Box<dyn Outbound>),
         OutboundProtocolOption::Freedom => {
-            Ok(Box::new(FreedomOutbound::default()) as Box<dyn Outbound>)
+            Ok(Box::new(FreedomOutbound::new(connect_opts)) as Box<dyn Outbound>)
         }
         OutboundProtocolOption::Shadowsocks => {
             if let OutboundSettings::Shadowsocks { mut servers } = outbound.settings {
@@ -174,7 +200,12 @@ fn parse_outbound(outbound: OutboundConfig) -> Result<Box<dyn Outbound>> {
                     let server = servers.remove(0);
                     let addr = format!("{}:{}", server.address, server.port);
                     let addr = Address::from_str(&addr).map_err(|_| invalid_input_error(addr))?;
-                    let outbound = ShadowsocksOutbound::new(addr, server.password, server.method)?;
+                    let outbound = ShadowsocksOutbound::new(
+                        addr,
+                        server.password,
+                        server.method,
+                        connect_opts,
+                    )?;
                     return Ok(Box::new(outbound) as Box<dyn Outbound>);
                 }
             }
@@ -186,7 +217,7 @@ fn parse_outbound(outbound: OutboundConfig) -> Result<Box<dyn Outbound>> {
                     let server = servers.remove(0);
                     let addr = format!("{}:{}", server.address, server.port);
                     let addr = Address::from_str(&addr).map_err(|_| invalid_input_error(addr))?;
-                    let outbound = Socks5Outbound::new(addr, server.users);
+                    let outbound = Socks5Outbound::new(addr, server.users, connect_opts);
                     return Ok(Box::new(outbound) as Box<dyn Outbound>);
                 }
             }
@@ -203,6 +234,7 @@ fn parse_outbound(outbound: OutboundConfig) -> Result<Box<dyn Outbound>> {
                         addr,
                         server.password,
                         outbound.stream_settings.tls_settings,
+                        connect_opts,
                     )?;
                     return Ok(Box::new(outbound) as Box<dyn Outbound>);
                 }
@@ -226,6 +258,7 @@ fn parse_outbound(outbound: OutboundConfig) -> Result<Box<dyn Outbound>> {
                         user.id,
                         user.flow,
                         outbound.stream_settings.tls_settings,
+                        connect_opts,
                     )?;
                     return Ok(Box::new(outbound) as Box<dyn Outbound>);
                 }

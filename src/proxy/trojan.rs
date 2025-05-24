@@ -101,14 +101,19 @@ pub struct TrojanOutbound {
 }
 
 impl TrojanOutbound {
-    pub fn new(addr: Address, password: String, tls_settings: TlsSettings) -> Result<Self> {
+    pub fn new(
+        addr: Address,
+        password: String,
+        tls_settings: TlsSettings,
+        connect_opts: ConnectOpts,
+    ) -> Result<Self> {
         let tls = Tls::new(tls_settings, &addr)?;
         let password = Sha224::digest(password.as_bytes());
         let password = hex::encode(&password[..]);
         Ok(Self {
             addr,
             password,
-            connect_opts: ConnectOpts::default(),
+            connect_opts,
             tls,
         })
     }

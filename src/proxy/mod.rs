@@ -7,6 +7,8 @@ pub mod shadowsocks;
 pub mod socks;
 #[cfg(feature = "outbound-trojan")]
 pub mod trojan;
+#[cfg(feature = "inbound-tun")]
+pub mod tun;
 pub mod vless;
 
 use crate::app::config::OutboundProtocolOption;
@@ -176,10 +178,8 @@ pub trait ProxySocket: Send + Sync + Unpin {
 
 #[async_trait]
 pub trait Inbound: Send + Sync {
-    fn addr(&self) -> &SocketAddr;
     fn clone_box(&self) -> Box<dyn Inbound>;
-    async fn handle_tcp(&self, stream: tokio::net::TcpStream, context: AppContext) -> Result<()>;
-    async fn run_udp_server(&self, context: AppContext) -> Result<()>;
+    async fn run(&self, context: AppContext) -> Result<()>;
 }
 
 impl Clone for Box<dyn Inbound> {

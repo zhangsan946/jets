@@ -53,13 +53,14 @@ impl VlessOutbound {
         id: Uuid,
         flow: VlessFlow,
         tls_settings: TlsSettings,
+        connect_opts: ConnectOpts,
     ) -> Result<Self> {
         let tls = Tls::new(tls_settings, &addr)?;
         Ok(Self {
             addr,
             id,
             flow,
-            connect_opts: ConnectOpts::default(),
+            connect_opts,
             tls,
         })
     }

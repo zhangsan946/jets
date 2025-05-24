@@ -17,6 +17,11 @@ pub const DEFAULT_BUF_SIZE: usize = 8 * 1024;
 /// [here](http://support.microsoft.com/kb/822061/)*
 pub const MAXIMUM_UDP_PAYLOAD_SIZE: usize = 65536;
 
+/// Default TCP Keep Alive timeout
+///
+/// This is borrowed from Go's `net` library's default setting
+pub const TCP_DEFAULT_KEEPALIVE_TIMEOUT: Duration = Duration::from_secs(15);
+
 pub fn invalid_input_error<T: ToString>(message: T) -> Error {
     Error::new(ErrorKind::InvalidInput, message.to_string())
 }

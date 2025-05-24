@@ -1,8 +1,7 @@
 // https://datatracker.ietf.org/doc/html/rfc1928
 
 use super::super::net_manager::UdpInboundWrite;
-use super::super::{Inbound, Outbound, ProxySocket, ProxyStream};
-use super::SocksInbound;
+use super::super::{Outbound, ProxySocket, ProxyStream};
 use crate::app::config::{OutboundProtocolOption, SocksUser};
 use crate::app::connect_tcp_host;
 use crate::app::dns::DnsManager;
@@ -35,8 +34,7 @@ pub struct Socks5Inbound {
 }
 
 impl Socks5Inbound {
-    pub fn new(addr: SocketAddr, accounts: Vec<(String, String)>, udp_enabled: bool) -> Self {
-        let accounts: HashMap<_, _> = accounts.into_iter().collect();
+    pub fn new(addr: SocketAddr, accounts: HashMap<String, String>, udp_enabled: bool) -> Self {
         Self {
             addr,
             accounts,
@@ -45,27 +43,8 @@ impl Socks5Inbound {
     }
 }
 
-impl From<SocksInbound> for Socks5Inbound {
-    fn from(value: SocksInbound) -> Self {
-        Socks5Inbound {
-            addr: value.addr,
-            accounts: value.accounts,
-            udp_enabled: value.udp_enabled,
-        }
-    }
-}
-
-#[async_trait]
-impl Inbound for Socks5Inbound {
-    fn addr(&self) -> &SocketAddr {
-        &self.addr
-    }
-
-    fn clone_box(&self) -> Box<dyn Inbound> {
-        Box::new(self.clone())
-    }
-
-    async fn handle_tcp(&self, mut stream: TokioTcpStream, context: AppContext) -> Result<()> {
+impl Socks5Inbound {
+    pub async fn handle_tcp(&self, mut stream: TokioTcpStream, context: AppContext) -> Result<()> {
         // 1. Handshake
         let request = match HandshakeRequest::read_from(&mut stream).await {
             Ok(r) => r,
@@ -161,16 +140,13 @@ impl Inbound for Socks5Inbound {
         }
     }
 
-    async fn run_udp_server(&self, context: AppContext) -> Result<()> {
-        let socket = UdpSocket::listen(&self.addr).await?;
-        let socket = Arc::new(socket);
+    pub async fn handle_udp(&self, socket: Arc<UdpSocket>, context: AppContext) -> Result<()> {
         let (mut manager, cleanup_interval, mut keepalive_rx) = NatManager::new(
             Socks5UdpInboundWriter {
                 inbound: socket.clone(),
             },
             context,
         );
-        log::info!("starting socks5 udp server, listening on: {}", self.addr);
         let mut buffer = [0u8; MAXIMUM_UDP_PAYLOAD_SIZE];
         let mut cleanup_timer = interval(cleanup_interval);
         loop {
@@ -287,12 +263,12 @@ pub struct Socks5Outbound {
 }
 
 impl Socks5Outbound {
-    pub fn new(addr: Address, accounts: Vec<SocksUser>) -> Self {
+    pub fn new(addr: Address, accounts: Vec<SocksUser>, connect_opts: ConnectOpts) -> Self {
         let accounts: HashMap<_, _> = accounts.into_iter().map(|s| (s.user, s.pass)).collect();
         Self {
             addr,
             accounts,
-            connect_opts: ConnectOpts::default(),
+            connect_opts,
         }
     }
 

@@ -31,6 +31,9 @@ fn main() -> std::io::Result<()> {
     config
         .inbounds
         .push(InboundConfig::new_http("127.0.0.1", 1090));
+    // config
+    //     .inbounds
+    //     .push(InboundConfig::new_tun("wintun", Some("198.18.0.1/24")));
 
     // config
     //     .outbounds

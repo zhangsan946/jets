@@ -52,6 +52,7 @@ where
         respond_writer: W,
         context: Context,
     ) -> (NatManager<W>, Duration, Receiver<SocketAddr>) {
+        // TODO: allow to customize
         let time_to_live = DEFAULT_UDP_SESSION_EXPIRY_DURATION;
         // LruCache::with_expiry_duration_and_capacity(time_to_live, capacity)
         let udp_session_map = LruCache::with_expiry_duration(time_to_live);

@@ -14,7 +14,7 @@ This project is still in the very early development stage. Welcome anyone intere
 - Inbound
 	- socks(✅ socks5, ❌ socks4)
 	- ✅ http
-	- ❌ tun
+	- ✅ tun
 
 - Outbound
 	- freedom
@@ -41,7 +41,8 @@ This project is still in the very early development stage. Welcome anyone intere
 	- ❌ http, websocket, gprc
 
 - Other
-	- ❌ Connection option, e.g. bind interface, tcp fast open, ...
+	- ✅ Connection option, e.g. bind interface, tcp fast open, ...
+	- ❌ Connection pool and retry logic
 	- ❌ socks & http authentication
 	- ✅ UDP Full Cone
 	- ❌ fakedns
@@ -53,6 +54,11 @@ Create a Jets' configuration file named `config.json`. For detailed explanation 
 ```bash
 jet -c config.json
 ```
+
+### Use **tun** inbound on Windows
+
+Need to copy the [wintun.dll](https://wintun.net/) file which matches the system's architecture to 
+the same directory as `jets.exe` and run as administrator.
 
 ## Development
 1. Install protocol compiler by downloading a pre-built binary from [Protocol Buffers releases](https://github.com/protocolbuffers/protobuf/releases).
@@ -74,8 +80,6 @@ jet -c config.json
 	```
 	export RUSTFLAGS="-C target-cpu=native"
 	```
-
-
 
 ## Limitation
 1. shadowsocks using 2022 cipher doesn't support password containing '-'.

@@ -42,12 +42,17 @@ pub struct ShadowsocksOutbound {
 }
 
 impl ShadowsocksOutbound {
-    pub fn new(addr: Address, password: String, method: CipherKind) -> Result<Self> {
+    pub fn new(
+        addr: Address,
+        password: String,
+        method: CipherKind,
+        connect_opts: ConnectOpts,
+    ) -> Result<Self> {
         let server_config =
             ServerConfig::new(addr, password, method).map_err(invalid_input_error)?;
         Ok(Self {
             server_config,
-            connect_opts: ConnectOpts::default(),
+            connect_opts,
             context: Context::new_shared(ServerType::Local),
         })
     }

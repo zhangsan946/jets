@@ -14,15 +14,13 @@ rust-version = "1.80"
 exclude = ["src/bin/**", "examples/**", ".github/**"]
 
 [features]
-default = ["inbound-http", "outbound-trojan"]
+default = ["inbound-http", "inbound-tun", "outbound-trojan"]
 
 inbound-http = ["pin-project", "tokio-rustls"]
+inbound-tun = ["cfg-if", "etherparse", "ipnet", "smoltcp", "spin", "tun"]
 outbound-trojan = ["hex", "sha2"]
 
 [dependencies]
-actix-rt = "2.10"
-actix-server = "2.5"
-actix-service = "2.0"
 async-trait = "0.1"
 blake3 = "1.8.1"
 bytes = "1"
@@ -46,7 +44,7 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 shadowsocks = { version = "1.23.0", features = ["aead-cipher-2022", "security-replay-attack-detect"] }
 shadowsocks-crypto = { version = "0.6.0", default-features = false }
-tokio = { version = "1", features = ["net", "io-util", "macros", "sync"] }
+tokio = { version = "1", features = ["net", "io-util", "macros", "rt", "signal", "sync"] }
 trait-variant = "0.1"
 uuid = {version = "1.13.1", features = ["v5"]}
 webpki-roots = "0.26.8"
@@ -54,6 +52,26 @@ webpki-roots = "0.26.8"
 # http inbound
 pin-project = { version = "1.1", optional = true }
 tokio-rustls = { version = "0.26", optional = true, default-features = false }
+
+# tun inbound
+cfg-if = { version = "1", optional = true }
+etherparse = { version = "0.18", optional = true }
+ipnet = { version = "2.10", optional = true }
+smoltcp = { version = "0.12", optional = true, default-features = false, features = [
+    "std",
+    "log",
+    "medium-ip",
+    "proto-ipv4",
+    "proto-ipv4-fragmentation",
+    "proto-ipv6",
+    "socket-icmp",
+    "socket-udp",
+    "socket-tcp",
+    "socket-tcp-cubic",
+] }
+spin = { version = "0.10", optional = true }
+[target.'cfg(any(target_os = "ios", target_os = "macos", target_os = "linux", target_os = "android", target_os = "windows", target_os = "freebsd"))'.dependencies]
+tun = { version = "0.7", optional = true, features = ["async"] }
 
 # trojan outbound
 hex = { version = "0.4", optional = true }

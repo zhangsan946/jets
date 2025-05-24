@@ -3,7 +3,9 @@ use super::addons::Addons;
 use super::xtls::VisionStream;
 use super::VlessFlow;
 use crate::common::{from_str, invalid_data_error, to_string, Address, DEFAULT_BUF_SIZE};
+use crate::impl_asyncwrite_flush_shutdown;
 use crate::proxy::request_command;
+use crate::transport::tls::TlsStream;
 use bytes::{Buf, BufMut, BytesMut};
 use futures::{ready, FutureExt};
 use prost::Message;
@@ -154,74 +156,66 @@ impl VlessHeaderResponse {
 #[derive(Debug)]
 enum VlessStreamReadState {
     HeaderVersion([u8; 2]),
-    DecodeHeaderFlow(Box<[u8]>),
     DecodeBody,
 }
 
-enum StreamType<T: ProxyStream> {
-    None(Box<T>),
-    Vision(Box<VisionStream<T>>),
-}
-
-pub(crate) struct VlessStream<S>
-where
-    S: ProxyStream,
-{
-    stream: StreamType<S>,
+pub(crate) struct VlessStream {
+    stream: Box<dyn ProxyStream>,
     stream_id: u32,
     read_state: VlessStreamReadState,
     addr: Address,
-    //flow: VlessFlow,
+    flow: VlessFlow,
 }
 
-impl<S> VlessStream<S>
-where
-    S: ProxyStream,
-{
-    pub fn new(stream: S, addr: Address, id: Uuid, flow: VlessFlow, stream_id: u32) -> Self {
-        let stream = match flow {
-            VlessFlow::None => StreamType::None(Box::new(stream)),
-            _ => StreamType::Vision(Box::new(VisionStream::new(stream, id, stream_id))),
+impl VlessStream {
+    pub fn new<S: ProxyStream>(
+        stream: S,
+        addr: Address,
+        id: Uuid,
+        flow: VlessFlow,
+        stream_id: u32,
+    ) -> Self {
+        let stream: Box<dyn ProxyStream> = match flow {
+            VlessFlow::None => Box::new(stream),
+            _ => Box::new(VisionStream::new(stream, id, stream_id)),
         };
         Self {
             stream,
             stream_id,
             read_state: VlessStreamReadState::HeaderVersion([0u8; 2]),
             addr,
-            //flow,
+            flow,
         }
     }
 }
 
-impl<S> LocalAddr for VlessStream<S>
-where
-    S: ProxyStream,
-{
+impl LocalAddr for VlessStream {
     fn local_addr(&self) -> Result<SocketAddr> {
-        match self.stream {
-            StreamType::None(ref stream) => stream.local_addr(),
-            StreamType::Vision(ref stream) => stream.local_addr(),
-        }
+        self.stream.local_addr()
     }
 }
 
-impl<S> AsyncRead for VlessStream<S>
-where
-    S: ProxyStream,
-{
+impl AsyncRead for VlessStream {
     fn poll_read(
         self: Pin<&mut Self>,
         cx: &mut Context<'_>,
         buf: &mut ReadBuf<'_>,
     ) -> Poll<Result<()>> {
         let this = self.get_mut();
-        let raw_stream = match this.stream {
-            StreamType::None(ref mut stream) => stream,
-            StreamType::Vision(ref mut stream) => stream.as_raw_stream(),
-        };
         loop {
             match this.read_state {
                 VlessStreamReadState::HeaderVersion(ref mut buffer) => {
+                    let raw_stream = match this.flow {
+                        VlessFlow::None => this.stream.as_mut(),
+                        _ => this
+                            .stream
+                            .as_mut()
+                            .as_any_mut()
+                            .downcast_mut::<VisionStream<TlsStream>>()
+                            .expect("vision stream")
+                            .as_raw_stream(),
+                    };
+
                     ready!(raw_stream.poll_read_exact(cx, buffer))?;
                     let ver = buffer[0];
                     if ver != VLESS_VERSION {
@@ -234,58 +228,45 @@ where
                     match buffer[1] {
                         0 => {
                             log::debug!("{} Received ver: {} flow: empty", this.stream_id, ver);
-                            this.read_state = VlessStreamReadState::DecodeBody;
                         }
                         len => {
-                            let buffer = vec![0u8; len as usize].into_boxed_slice();
+                            let mut buffer = vec![0u8; len as usize].into_boxed_slice();
                             log::debug!(
                                 "{} Received ver: {} flow: len {}",
                                 this.stream_id,
                                 ver,
                                 len
                             );
-                            this.read_state = VlessStreamReadState::DecodeHeaderFlow(buffer);
+                            ready!(raw_stream.poll_read_exact(cx, &mut buffer))?;
+                            let addon = Addons::decode(buffer.as_ref())?;
+                            let flow: VlessFlow = from_str(&addon.flow)?;
+
+                            log::debug!("{} Received flow: {:?}", this.stream_id, flow);
+                            // It seems that it won't response the same vless flow in request
+                            // if this.flow != flow {
+                            //     log::error!("Invalid VLESS flow {} received", flow);
+                            //     return Err(invalid_data_error(format!(
+                            //         "Invalid VLESS flow {} received",
+                            //         flow
+                            //     )))
+                            //     .into();
+                            // }
                         }
                     };
-                }
-                VlessStreamReadState::DecodeHeaderFlow(ref mut buffer) => {
-                    ready!(raw_stream.poll_read_exact(cx, buffer))?;
-                    let addon = Addons::decode(buffer.as_ref())?;
-                    let flow: VlessFlow = from_str(&addon.flow)?;
-
-                    log::debug!("{} Received flow: {:?}", this.stream_id, flow);
-                    // It seems that it won't response the same vless flow in request
-                    // if this.flow != flow {
-                    //     log::error!("Invalid VLESS flow {} received", flow);
-                    //     return Err(invalid_data_error(format!(
-                    //         "Invalid VLESS flow {} received",
-                    //         flow
-                    //     )))
-                    //     .into();
-                    // }
-
                     this.read_state = VlessStreamReadState::DecodeBody;
                 }
                 VlessStreamReadState::DecodeBody => {
                     log::debug!("{} Reading response body", this.stream_id);
-                    match this.stream {
-                        StreamType::None(ref mut stream) => {
-                            return Pin::new(stream).poll_read(cx, buf).map_err(Into::into)
-                        }
-                        StreamType::Vision(ref mut stream) => {
-                            return Pin::new(stream).poll_read(cx, buf).map_err(Into::into)
-                        }
-                    }
+                    return Pin::new(&mut this.stream)
+                        .poll_read(cx, buf)
+                        .map_err(Into::into);
                 }
             }
         }
     }
 }
 
-impl<S> AsyncWrite for VlessStream<S>
-where
-    S: ProxyStream,
-{
+impl AsyncWrite for VlessStream {
     fn poll_write(self: Pin<&mut Self>, cx: &mut Context<'_>, buf: &[u8]) -> Poll<Result<usize>> {
         let this = self.get_mut();
         log::debug!(
@@ -295,31 +276,12 @@ where
             this.addr
         );
 
-        match this.stream {
-            StreamType::None(ref mut stream) => {
-                Pin::new(stream).poll_write(cx, buf).map_err(Into::into)
-            }
-            StreamType::Vision(ref mut stream) => {
-                Pin::new(stream).poll_write(cx, buf).map_err(Into::into)
-            }
-        }
+        Pin::new(&mut this.stream)
+            .poll_write(cx, buf)
+            .map_err(Into::into)
     }
 
-    fn poll_flush(self: Pin<&mut Self>, ctx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
-        let this = self.get_mut();
-        match this.stream {
-            StreamType::None(ref mut stream) => AsyncWrite::poll_flush(Pin::new(stream), ctx),
-            StreamType::Vision(ref mut stream) => AsyncWrite::poll_flush(Pin::new(stream), ctx),
-        }
-    }
-
-    fn poll_shutdown(self: Pin<&mut Self>, ctx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
-        let this = self.get_mut();
-        match this.stream {
-            StreamType::None(ref mut stream) => AsyncWrite::poll_shutdown(Pin::new(stream), ctx),
-            StreamType::Vision(ref mut stream) => AsyncWrite::poll_shutdown(Pin::new(stream), ctx),
-        }
-    }
+    impl_asyncwrite_flush_shutdown!(stream);
 }
 
 pub(crate) struct VlessUdpStream<S> {

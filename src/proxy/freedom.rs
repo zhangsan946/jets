@@ -7,9 +7,15 @@ use async_trait::async_trait;
 use std::io::Result;
 use std::net::SocketAddr;
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 pub struct FreedomOutbound {
     connect_opts: ConnectOpts,
+}
+
+impl FreedomOutbound {
+    pub fn new(connect_opts: ConnectOpts) -> Self {
+        FreedomOutbound { connect_opts }
+    }
 }
 
 #[async_trait]
