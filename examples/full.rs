@@ -18,8 +18,9 @@ fn main() -> std::io::Result<()> {
     // println!("json config: {:?}", config);
 
     let mut config = Config::default();
-    //config.log.error = Some("d:\\error.log".to_string());
-    config.log.loglevel = "jets=debug,info".to_string();
+    config.log.loglevel = "jets=trace,info".to_string();
+    // config.log.error = Some("error.log".to_string());
+    // config.log.access = Some("access.log".to_string());
 
     let mut socks_inbound = InboundConfig::new_socks("127.0.0.1", 1080);
     socks_inbound.settings = InboundSettings::Socks {
@@ -85,14 +86,15 @@ fn main() -> std::io::Result<()> {
     config.routing.rules.push(routing_rule);
     config.routing.domain_strategy = jets::app::config::DomainStrategy::IPIfNonMatch;
 
-    let dns_server = DnsServer::new("1.1.1.1".to_string());
+    let dns_server = DnsServer::new("1.1.1.1".to_string())?;
     config.dns.servers.push(dns_server);
-    let mut dns_server = DnsServer::new("114.114.114.114".to_string());
+    let mut dns_server = DnsServer::new("114.114.114.114".to_string())?;
     dns_server.domains.push("geosite:cn".to_string());
     config.dns.servers.push(dns_server);
-    let dns_server = DnsServer::new("114.114.115.115".to_string());
+    let dns_server = DnsServer::new("114.114.115.115".to_string())?;
+    config.dns.servers.push(dns_server);
+    let dns_server = DnsServer::new("localhost".to_string())?;
     config.dns.servers.push(dns_server);
 
-    let app = App::new(config)?;
-    app.run()
+    App::run(config)
 }

@@ -88,13 +88,12 @@ impl Socks5Inbound {
         }
 
         // 2. Fetch headers
+        let peer_addr = stream.peer_addr()?;
         let request = match TcpRequestHeader::read_from(&mut stream).await {
             Ok(h) => h,
             Err(err) => {
-                let response = TcpResponseHeader::new(
-                    err.as_reply(),
-                    Address::SocketAddress(stream.peer_addr()?),
-                );
+                let response =
+                    TcpResponseHeader::new(err.as_reply(), Address::SocketAddress(peer_addr));
                 response.write_to(&mut stream).await?;
                 return Err(err.into());
             }
@@ -104,7 +103,7 @@ impl Socks5Inbound {
         // 3. Handle Command
         match request.command {
             Command::TcpConnect => {
-                let mut down_stream = connect_tcp_host(address, context).await?;
+                let mut down_stream = connect_tcp_host(&peer_addr, address, context).await?;
                 let addr = Address::SocketAddress(down_stream.local_addr()?);
                 let response = TcpResponseHeader::new(Reply::Succeeded, addr);
                 response.write_to(&mut stream).await?;

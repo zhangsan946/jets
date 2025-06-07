@@ -5,7 +5,7 @@ use bytes::Bytes;
 use futures::future;
 use lru_time_cache::LruCache;
 use std::future::poll_fn;
-use std::io::{Error, ErrorKind, Result};
+use std::io::{Error, Result};
 use std::marker::PhantomData;
 use std::net::SocketAddr;
 use tokio::io::ReadBuf;
@@ -156,7 +156,7 @@ where
 
     fn try_send(&self, data: (Address, Bytes)) -> Result<()> {
         if self.sender.try_send(data).is_err() {
-            let err = Error::new(ErrorKind::Other, "udp relay channel full");
+            let err = Error::other("udp relay channel full");
             return Err(err);
         }
         Ok(())

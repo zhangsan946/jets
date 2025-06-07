@@ -82,7 +82,8 @@ the same directory as `jets.exe` and run as administrator.
 	```
 
 ## Limitation
-1. shadowsocks using 2022 cipher doesn't support password containing '-'.
+1. Shadowsocks using 2022 cipher doesn't support password containing '-'.
+2. It is not able to get system dns config on Android. May refer to https://github.com/hickory-dns/hickory-dns/issues/652#issuecomment-1783178552 for possbile workaround.
 
 ## Credits
 1. [shadowsocks-rust](https://github.com/shadowsocks/shadowsocks-rust)

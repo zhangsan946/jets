@@ -112,7 +112,7 @@ fn write_address<B: BufMut>(addr: &Address, buf: &mut B) {
         Address::DomainNameAddress(ref dnaddr, _) => {
             buf.put_u8(address_type::DOMAIN);
             buf.put_u8(dnaddr.len() as u8);
-            buf.put_slice(dnaddr[..].as_bytes());
+            buf.put_slice(dnaddr.as_bytes());
         }
     }
 }

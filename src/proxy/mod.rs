@@ -25,6 +25,7 @@ use std::net::SocketAddr;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
+use tokio::sync::mpsc;
 
 pub trait AsTcpStream {
     fn as_tcp_stream(&mut self) -> &mut TcpStream;
@@ -179,7 +180,7 @@ pub trait ProxySocket: Send + Sync + Unpin {
 #[async_trait]
 pub trait Inbound: Send + Sync {
     fn clone_box(&self) -> Box<dyn Inbound>;
-    async fn run(&self, context: AppContext) -> Result<()>;
+    async fn run(&self, context: AppContext, channel: Option<mpsc::Sender<String>>) -> Result<()>;
 }
 
 impl Clone for Box<dyn Inbound> {

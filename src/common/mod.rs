@@ -1,3 +1,5 @@
+pub mod log;
+
 use serde::de::{value, Deserialize, IntoDeserializer};
 use serde::ser::Serialize;
 pub use shadowsocks::relay::Address;

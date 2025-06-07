@@ -16,6 +16,7 @@ use std::collections::HashMap;
 use std::io::{ErrorKind, Result};
 use std::net::SocketAddr;
 use tokio::net::TcpStream;
+use tokio::sync::mpsc;
 use tokio::time::{sleep, Duration};
 
 #[derive(Clone, Debug)]
@@ -42,10 +43,13 @@ impl Inbound for HttpInbound {
         Box::new(self.clone())
     }
 
-    async fn run(&self, context: Context) -> Result<()> {
+    async fn run(&self, context: Context, channel: Option<mpsc::Sender<String>>) -> Result<()> {
         let listener = TcpListener::bind_with_opts(&self.addr, self.accept_opts.clone()).await?;
         let addr = listener.local_addr()?;
         log::info!("Starting http server, listening on: {}", addr);
+        if let Some(channel) = channel {
+            let _ = channel.send("http".to_string()).await;
+        }
 
         loop {
             let (stream, peer_addr) = match listener.accept().await {

@@ -1,3 +1,4 @@
+use crate::common::log::JETS_ACCESS_LIST;
 use crate::common::{invalid_input_error, TCP_DEFAULT_KEEPALIVE_TIMEOUT};
 use crate::impl_display;
 use crate::transport::raw::{AcceptOpts, ConnectOpts, TcpSocketOpts, UdpSocketOpts};
@@ -44,7 +45,7 @@ impl Default for LogConfig {
         Self {
             access: None,
             error: None,
-            loglevel: "warn".to_string(),
+            loglevel: format!("{}=info, warn", JETS_ACCESS_LIST),
         }
     }
 }
@@ -243,20 +244,23 @@ pub enum InboundSettings {
     },
     Tun {
         name: String,
+        address: String,
+        destination: String,
+        #[cfg(unix)]
         #[serde(default)]
-        address: Option<String>,
-        #[serde(default)]
-        destination: Option<String>,
+        fd: Option<i32>,
     },
     #[default]
     None,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Hash)]
-#[serde(rename_all = "lowercase", untagged)]
+#[serde(rename_all = "lowercase")]
 pub enum DestOverrideOption {
     Http,
     Tls,
+    Quic,
+    Fakedns,
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]
@@ -310,12 +314,19 @@ impl InboundConfig {
     }
 
     #[cfg(feature = "inbound-tun")]
-    pub fn new_tun<S: Into<String>>(name: S, address: Option<S>, destination: Option<S>) -> Self {
+    pub fn new_tun<S: Into<String>>(
+        name: S,
+        address: S,
+        destination: S,
+        #[cfg(unix)] fd: Option<i32>,
+    ) -> Self {
         let mut inbound = Self::new("0.0.0.0", 0, InboundProtocolOption::Tun);
         inbound.settings = InboundSettings::Tun {
             name: name.into(),
-            address: address.map(|s| s.into()),
-            destination: destination.map(|s| s.into()),
+            address: address.into(),
+            destination: destination.into(),
+            #[cfg(unix)]
+            fd,
         };
         inbound.sniffing.enabled = true;
         inbound.sniffing.dest_override = vec![DestOverrideOption::Tls, DestOverrideOption::Http];
@@ -607,12 +618,27 @@ pub struct DnsServer {
 }
 
 impl DnsServer {
-    pub fn new(address: String) -> Self {
-        Self {
+    pub fn new(address: String) -> IoResult<Self> {
+        // TODO: To support https://a.b.c.d:8443/my-dns-query
+        let (address, port) = match address.rfind(":") {
+            Some(i) if (address.len() > i + 1) && (address.get(i..(i + 2)) != Some(":/")) => {
+                let (addr, port_str) = address.split_at(i);
+                let port = port_str[1..].parse::<u16>().map_err(|_| {
+                    invalid_input_error(format!(
+                        "Invalid port number in DNS server address: {}",
+                        address
+                    ))
+                })?;
+                (addr.to_string(), port)
+            }
+            _ => (address, default_dns_port()),
+        };
+
+        Ok(Self {
             address,
-            port: default_dns_port(),
+            port,
             domains: Vec::new(),
-        }
+        })
     }
 }
 
@@ -667,13 +693,16 @@ where
     }
 
     let servers = Vec::<DeEither>::deserialize(deserializer)?;
-    Ok(servers
-        .into_iter()
-        .map(|server| match server {
-            DeEither::DnsServer(s) => s,
-            DeEither::String(s) => DnsServer::new(s),
-        })
-        .collect())
+    let mut output = Vec::new();
+    for server in servers {
+        match server {
+            DeEither::DnsServer(s) => output.push(s),
+            DeEither::String(s) => {
+                output.push(DnsServer::new(s).map_err(Error::custom)?);
+            }
+        }
+    }
+    Ok(output)
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]

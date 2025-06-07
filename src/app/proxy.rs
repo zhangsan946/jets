@@ -169,11 +169,17 @@ fn parse_inbound(inbound: InboundConfig) -> Result<Box<dyn Inbound>> {
                 name,
                 address,
                 destination,
+                #[cfg(unix)]
+                fd,
             } = inbound.settings
             {
                 let sniffer = Sniffer::from(inbound.sniffing);
+                #[cfg(not(unix))]
                 let tun_inbound =
                     TunInbound::new(name, address, destination, accept_opts, sniffer)?;
+                #[cfg(unix)]
+                let tun_inbound =
+                    TunInbound::new(name, address, destination, fd, accept_opts, sniffer)?;
                 Ok(Box::new(tun_inbound) as Box<dyn Inbound>)
             } else {
                 Err(invalid_input_error("invalid tun inbound settings"))

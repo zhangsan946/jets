@@ -10,6 +10,7 @@ pub mod sniff;
 pub mod utils;
 
 use crate::app::config::OutboundProtocolOption;
+use crate::common::log::{Logger, Target, JETS_ACCESS_LIST};
 use crate::common::{copy_bidirectional, invalid_data_error, invalid_input_error, Address};
 use crate::proxy::{Outbound, ProxySocket, ProxyStream};
 pub use config::Config;
@@ -18,12 +19,12 @@ use futures::{future, FutureExt};
 use proxy::{Inbounds, Outbounds};
 use router::Router;
 use std::collections::VecDeque;
-use std::fs::OpenOptions;
 use std::io::{Error, Result};
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::runtime::Runtime;
+use tokio::sync::mpsc;
 use utils::{create_abort_signal, ServerHandle};
 
 pub mod env_vars {
@@ -38,34 +39,19 @@ pub struct App {
 }
 
 impl App {
-    pub fn new(config: Config) -> Result<Self> {
-        let mut builder = env_logger::Builder::new();
-        builder.parse_env(env_logger::Env::new().default_filter_or(config.log.loglevel));
-        let target = if let Some(error_file) = config.log.error {
-            let file = OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open(error_file)?;
-            env_logger::Target::Pipe(Box::new(file))
-        } else {
-            env_logger::Target::Stdout
-        };
-        builder.target(target);
-        builder.init();
-
+    pub async fn new(config: Config) -> Result<Self> {
         let inbounds = Inbounds::new(config.inbounds)?;
         let mut outbounds = Outbounds::new(config.outbounds)?;
         let router = Router::new(config.routing)?;
         router.validate(&outbounds)?;
-        let dns = DnsManager::new(config.dns.clone(), &outbounds, &router)?;
+        let dns = DnsManager::new(config.dns.clone(), &outbounds, &router).await?;
 
         // pre_connect would replace server address with server socketaddr
         // which will make sure no outbound loopback in dns config
-        let rt = Runtime::new()?;
         let mut outbounds_with_domain_addr: VecDeque<(String, Arc<Box<dyn Outbound>>)> =
             VecDeque::new();
         for (tag, outbound) in outbounds.iter_mut() {
-            match rt.block_on(async { outbound.pre_connect(&dns).await }) {
+            match outbound.pre_connect(&dns).await {
                 Ok(Some(new_outbound)) => {
                     *outbound = Arc::new(new_outbound);
                 }
@@ -83,7 +69,7 @@ impl App {
         let mut loop_time = outbounds_with_domain_addr.len();
         loop_time *= loop_time;
         while let Some((tag, outbound)) = outbounds_with_domain_addr.pop_front() {
-            match rt.block_on(async { outbound.pre_connect(&dns).await }) {
+            match outbound.pre_connect(&dns).await {
                 Ok(Some(new_outbound)) => {
                     outbounds.insert(tag, Arc::new(new_outbound));
                 }
@@ -100,7 +86,7 @@ impl App {
             }
         }
         // make the new dns with updated outbounds
-        let dns = DnsManager::new(config.dns, &outbounds, &router)?;
+        let dns = DnsManager::new(config.dns, &outbounds, &router).await?;
 
         Ok(Self {
             inbounds,
@@ -110,37 +96,63 @@ impl App {
         })
     }
 
-    pub fn run(&self) -> Result<()> {
+    pub async fn serve(&self, channel: Option<mpsc::Sender<String>>) -> Result<()> {
         let router = self.router.clone();
         let outbounds = self.outbounds.clone();
         let dns = self.dns.clone();
         let inbounds = self.inbounds.iter();
 
+        let mut vfut = Vec::new();
+        for (tag, inbound) in inbounds {
+            let inbound = inbound.to_owned();
+            let context = Context::new(
+                tag.to_owned(),
+                outbounds.clone(),
+                router.clone(),
+                dns.clone(),
+            );
+            let channel = channel.clone();
+            vfut.push(ServerHandle(tokio::spawn(async move {
+                inbound.run(context, channel).await
+            })));
+        }
+        let (res, ..) = future::select_all(vfut).await;
+        // TODO: abort all the spawned tasks when serving is done
+        res
+    }
+
+    pub fn run(config: Config) -> Result<()> {
+        let error_target = if let Some(ref error_file) = config.log.error {
+            let file = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(error_file)?;
+            Target::Pipe(Box::new(file))
+        } else {
+            Target::Stdout
+        };
+        let access_target = if let Some(ref access_file) = config.log.access {
+            let file = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(access_file)?;
+            Target::Pipe(Box::new(file))
+        } else {
+            Target::Stdout
+        };
+        Logger::new(&config.log.loglevel, error_target, access_target)
+            .init()
+            .map_err(|e| invalid_input_error(format!("Failed to init logger: {}", e)))?;
+
         //let mut builder = tokio::runtime::Builder::new_current_thread();
         //let rt = builder.enable_all().build()?;
         let rt = Runtime::new()?;
 
-        let future = async move {
-            let server = async move {
-                let mut vfut = Vec::new();
-                for (tag, inbound) in inbounds {
-                    let inbound = inbound.to_owned();
-                    let context = Context::new(
-                        tag.to_owned(),
-                        outbounds.clone(),
-                        router.clone(),
-                        dns.clone(),
-                    );
-                    vfut.push(ServerHandle(tokio::spawn(async move {
-                        inbound.run(context).await
-                    })));
-                }
-                let (res, ..) = future::select_all(vfut).await;
-                res
-            };
+        let future = async {
+            let app = Self::new(config).await?;
 
+            let server = app.serve(None).fuse();
             let abort_signal = create_abort_signal().fuse();
-            let server = server.fuse();
             tokio::pin!(abort_signal);
             tokio::pin!(server);
 
@@ -190,12 +202,15 @@ impl Context {
     }
 
     #[inline]
-    pub async fn get_outbound(&self, address: &Address) -> Result<&Arc<Box<dyn Outbound>>> {
+    pub async fn get_outbound(
+        &self,
+        address: &Address,
+    ) -> Result<(&Arc<Box<dyn Outbound>>, String)> {
         let outbound_tag = self
             .router
             .pick(&self.dns, address, &self.inbound_tag)
             .await?;
-        Ok(self.outbounds.get(&outbound_tag).unwrap())
+        Ok((self.outbounds.get(&outbound_tag).unwrap(), outbound_tag))
     }
 
     #[inline]
@@ -206,6 +221,7 @@ impl Context {
 
 pub(crate) async fn establish_tcp_tunnel<S>(
     stream: &mut Box<S>,
+    peer: &SocketAddr,
     address: Address,
     context: Context,
 ) -> Result<()>
@@ -214,17 +230,20 @@ where
 {
     // TODO: connection pool
     // TODO: exponential retry connection
-    let mut down_stream = connect_tcp_host(address, context).await?;
+    let mut down_stream = connect_tcp_host(peer, address, context).await?;
     return copy_bidirectional(stream, &mut down_stream)
         .await
         .map(|_| ());
 }
 
 pub(crate) async fn connect_tcp_host(
+    peer: &SocketAddr,
     address: Address,
     context: Context,
 ) -> Result<Box<dyn ProxyStream>> {
-    let outbound = context.get_outbound(&address).await?;
+    let (outbound, outbound_tag) = context.get_outbound(&address).await?;
+    log::info!(target: JETS_ACCESS_LIST, "from tcp:{} accepted tcp:{} [{} -> {}]", peer, address, context.inbound_tag.as_ref().unwrap_or(&"".to_string()), outbound_tag);
+
     let addr = if outbound.protocol() == OutboundProtocolOption::Freedom {
         let addr = context.resolve(&address).await?;
         Address::SocketAddress(addr)
@@ -242,7 +261,9 @@ pub(crate) async fn bind_udp_socket(
     address: Address,
     context: Context,
 ) -> Result<Box<dyn ProxySocket>> {
-    let outbound = context.get_outbound(&address).await?;
+    let (outbound, outbound_tag) = context.get_outbound(&address).await?;
+    log::info!(target: JETS_ACCESS_LIST, "from udp:{} accepted udp:{} [{} -> {}]", peer, address, context.inbound_tag.as_ref().unwrap_or(&"".to_string()), outbound_tag);
+
     let target = if outbound.protocol() == OutboundProtocolOption::Freedom {
         let addr = context.resolve(&address).await?;
         Address::SocketAddress(addr)

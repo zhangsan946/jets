@@ -372,7 +372,7 @@ impl Rule {
     }
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub(crate) enum MatchType {
     Substr(String),
     Regex(Regex),
@@ -380,6 +380,7 @@ pub(crate) enum MatchType {
     FullDomain(String),
 }
 
+#[derive(Clone, Debug)]
 pub(crate) struct Domain {
     pub(crate) match_type: MatchType,
     attrs: Vec<String>,

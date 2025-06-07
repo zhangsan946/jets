@@ -24,7 +24,8 @@ use std::{
     collections::VecDeque,
     fmt::Debug,
     future::Future,
-    io::{Error, ErrorKind, Result},
+    io::{Error, Result},
+    net::SocketAddr,
     pin::Pin,
     sync::Arc,
     task::{Context, Poll},
@@ -122,6 +123,7 @@ where
     #[inline]
     pub async fn send_request(
         &self,
+        peer_addr: &SocketAddr,
         req: Request<B>,
         context: AppContext,
     ) -> Result<Response<Incoming>> {
@@ -170,7 +172,9 @@ where
             Address::SocketAddress(ref saddr) => Cow::Owned(saddr.ip().to_string()),
         };
 
-        let c = match HttpConnection::connect(scheme, host.clone(), &domain, context).await {
+        let c = match HttpConnection::connect(scheme, host.clone(), &domain, peer_addr, context)
+            .await
+        {
             Ok(c) => c,
             Err(err) => {
                 error!("failed to connect to host: {}, error: {}", host, err);
@@ -245,13 +249,14 @@ where
         scheme: &Scheme,
         host: Address,
         domain: &str,
+        peer_addr: &SocketAddr,
         context: AppContext,
     ) -> Result<HttpConnection<B>> {
         if *scheme != Scheme::HTTP && *scheme != Scheme::HTTPS {
             return Err(invalid_input_error("invalid scheme"));
         }
 
-        let stream = connect_tcp_host(host.clone(), context).await?;
+        let stream = connect_tcp_host(peer_addr, host.clone(), context).await?;
 
         if *scheme == Scheme::HTTP {
             HttpConnection::connect_http_http1(scheme, host, stream).await
@@ -283,7 +288,7 @@ where
             .await
         {
             Ok(s) => s,
-            Err(err) => return Err(Error::new(ErrorKind::Other, err)),
+            Err(err) => return Err(Error::other(err)),
         };
 
         tokio::spawn(async move {
@@ -322,7 +327,7 @@ where
                 .await
             {
                 Ok(s) => s,
-                Err(err) => return Err(Error::new(ErrorKind::Other, err)),
+                Err(err) => return Err(Error::other(err)),
             };
 
             tokio::spawn(async move {
@@ -344,7 +349,7 @@ where
                 .await
             {
                 Ok(s) => s,
-                Err(err) => return Err(Error::new(ErrorKind::Other, err)),
+                Err(err) => return Err(Error::other(err)),
             };
 
             tokio::spawn(async move {

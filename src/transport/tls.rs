@@ -77,12 +77,7 @@ impl Tls {
     ) -> Result<TlsStream> {
         let conn = TcpStream::connect_with_opts(addr, connect_opts).await?;
         let session = ClientConnection::new(self.tls_config.clone(), self.server_name.clone())
-            .map_err(|e| {
-                Error::new(
-                    ErrorKind::Other,
-                    format!("Unable to create tls session: {}", e),
-                )
-            })?;
+            .map_err(|e| Error::other(format!("Unable to create tls session: {}", e)))?;
         let mut tls_stream = TlsStream::new(conn, session, xtls);
         poll_fn(|cx| tls_stream.handshake(cx)).await?;
         Ok(tls_stream)

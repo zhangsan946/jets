@@ -15,6 +15,7 @@ use std::io::{Error, ErrorKind, Result};
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::net::TcpStream;
+use tokio::sync::mpsc;
 use tokio::time::{sleep, Duration};
 
 #[derive(Clone, Debug)]
@@ -48,12 +49,16 @@ impl Inbound for SocksInbound {
         Box::new(self.clone())
     }
 
-    async fn run(&self, context: Context) -> Result<()> {
+    async fn run(&self, context: Context, channel: Option<mpsc::Sender<String>>) -> Result<()> {
+        let channel_clone = channel.clone();
         let run_tcp = async {
             let listener =
                 TcpListener::bind_with_opts(&self.addr, self.accept_opts.clone()).await?;
             let addr = listener.local_addr()?;
             log::info!("Starting socks tcp server, listening on: {}", addr);
+            if let Some(channel) = channel_clone {
+                let _ = channel.send("socks".to_string()).await;
+            }
 
             loop {
                 let (stream, peer_addr) = match listener.accept().await {
@@ -94,6 +99,9 @@ impl Inbound for SocksInbound {
                     UdpSocket::listen_with_opts(&self.addr, self.accept_opts.clone()).await?;
                 let addr = socket.local_addr()?;
                 log::info!("Starting socks5 udp server, listening on: {}", addr);
+                if let Some(channel) = channel {
+                    let _ = channel.send("socks_udp".to_string()).await;
+                }
                 let socket = Arc::new(socket);
                 let socks5_inbound =
                     Socks5Inbound::new(self.addr, self.accounts.clone(), self.udp_enabled);

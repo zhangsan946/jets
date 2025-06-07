@@ -91,7 +91,8 @@ impl HttpService {
 
                         let upgraded_io = TokioIo::new(upgraded);
                         let mut stream = Box::new(upgraded_io);
-                        let _ = establish_tcp_tunnel(&mut stream, host, context).await;
+                        let _ =
+                            establish_tcp_tunnel(&mut stream, &self.peer_addr, host, context).await;
                     }
                     Err(err) => {
                         error!("failed to upgrade CONNECT request, error: {}", err);
@@ -117,7 +118,11 @@ impl HttpService {
         // Set keep-alive for connection with remote
         set_conn_keep_alive(version, req.headers_mut(), conn_keep_alive);
 
-        let mut res = match self.http_client.send_request(req, context).await {
+        let mut res = match self
+            .http_client
+            .send_request(&self.peer_addr, req, context)
+            .await
+        {
             Ok(resp) => resp,
             Err(_) => return make_internal_server_error(),
         };

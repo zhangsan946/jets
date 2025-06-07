@@ -13,11 +13,11 @@ use cfg_if::cfg_if;
 use ip_packet::IpPacket;
 use ipnet::IpNet;
 use smoltcp::wire::{IpProtocol, TcpPacket, UdpPacket};
-use std::io::{Error, ErrorKind, Result};
+use std::io::{Error, Result};
 use std::mem;
 use std::net::{IpAddr, SocketAddr};
-// #[cfg(unix)]
-// use std::os::unix::io::RawFd;
+#[cfg(unix)]
+use std::os::unix::io::RawFd;
 use tcp::TcpTun;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::mpsc;
@@ -47,6 +47,7 @@ cfg_if! {
 pub struct TunInbound {
     accept_opts: AcceptOpts,
     tun_config: TunConfiguration,
+    address: IpNet,
     sniffer: Sniffer,
 }
 
@@ -56,31 +57,31 @@ unsafe impl Send for TunInbound {}
 impl TunInbound {
     pub fn new(
         name: String,
-        address: Option<String>,
-        destination: Option<String>,
+        address: String,
+        destination: String,
+        #[cfg(unix)] fd: Option<RawFd>,
         accept_opts: AcceptOpts,
         sniffer: Sniffer,
     ) -> Result<Self> {
         let mut tun_config = TunConfiguration::default();
         tun_config.tun_name(name);
-        if let Some(addr) = address {
-            let addr: IpNet = addr
-                .parse()
-                .map_err(|_| invalid_input_error(format!("invalid tun address of {}", addr)))?;
-            tun_config.address(addr.addr()).netmask(addr.netmask());
+        let address: IpNet = address
+            .parse()
+            .map_err(|_| invalid_input_error(format!("invalid tun address of {}", address)))?;
+        tun_config
+            .address(address.addr())
+            .netmask(address.netmask());
+        let destination: IpAddr = destination.parse().map_err(|_| {
+            invalid_input_error(format!("invalid tun destination of {}", destination))
+        })?;
+        tun_config.destination(destination);
+
+        #[cfg(unix)]
+        if let Some(fd) = fd {
+            tun_config.raw_fd(fd);
+            tun_config.close_fd_on_drop(false);
         }
-        if let Some(addr) = destination {
-            let addr: IpAddr = addr
-                .parse()
-                .map_err(|_| invalid_input_error(format!("invalid tun destination of {}", addr)))?;
-            tun_config.destination(addr);
-        }
-        // TODO: macOS
-        // #[cfg(unix)]
-        // pub fn file_descriptor(mut self, fd: RawFd) -> Self {
-        //     self.tun_config.raw_fd(fd);
-        //     self
-        // }
+
         tun_config.layer(Layer::L3).up();
 
         // XXX: tun2 set IFF_NO_PI by default.
@@ -93,6 +94,7 @@ impl TunInbound {
 
         Ok(Self {
             accept_opts,
+            address,
             tun_config,
             sniffer,
         })
@@ -105,12 +107,15 @@ impl Inbound for TunInbound {
         Box::new(self.clone())
     }
 
-    async fn run(&self, context: Context) -> Result<()> {
+    async fn run(&self, context: Context, channel: Option<mpsc::Sender<String>>) -> Result<()> {
         let device = match create_as_async(&self.tun_config) {
             Ok(d) => d,
             Err(TunError::Io(err)) => return Err(err),
-            Err(err) => return Err(Error::new(ErrorKind::Other, err)),
+            Err(err) => return Err(Error::other(err)),
         };
+        if let Some(channel) = channel {
+            let _ = channel.send("tun".to_string()).await;
+        }
 
         let tcp = TcpTun::new(
             context.clone(),
@@ -123,6 +128,7 @@ impl Inbound for TunInbound {
 
         let handler = TunHandler {
             device,
+            address: self.address,
             tcp,
             udp,
             udp_cleanup_interval,
@@ -135,6 +141,7 @@ impl Inbound for TunInbound {
 
 struct TunHandler {
     device: AsyncDevice,
+    address: IpNet,
     tcp: TcpTun,
     udp: UdpTun,
     udp_cleanup_interval: Duration,
@@ -143,43 +150,7 @@ struct TunHandler {
 
 impl TunHandler {
     pub async fn run(mut self) -> Result<()> {
-        let address = match self.device.address() {
-            Ok(a) => a,
-            Err(err) => {
-                log::error!("[TUN] failed to get device address, error: {}", err);
-                return Err(Error::new(ErrorKind::Other, err));
-            }
-        };
-
-        let netmask = match self.device.netmask() {
-            Ok(n) => n,
-            Err(err) => {
-                log::error!("[TUN] failed to get device netmask, error: {}", err);
-                return Err(Error::new(ErrorKind::Other, err));
-            }
-        };
-
-        let address_net = match IpNet::with_netmask(address, netmask) {
-            Ok(n) => n,
-            Err(err) => {
-                log::error!(
-                    "[TUN] invalid address {}, netmask {}, error: {}",
-                    address,
-                    netmask,
-                    err
-                );
-                return Err(Error::new(ErrorKind::Other, err));
-            }
-        };
-
-        log::debug!(
-            "[TUN] tun device network: {} (address: {}, netmask: {})",
-            address_net,
-            address,
-            netmask
-        );
-
-        let address_broadcast = address_net.broadcast();
+        let address_broadcast = self.address.broadcast();
 
         let create_packet_buffer = || {
             let mut packet_buffer = TokenBuffer::with_capacity(MAXIMUM_UDP_PAYLOAD_SIZE);
