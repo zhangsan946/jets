@@ -1,4 +1,4 @@
-use jets::app::config::{DnsServer, InboundConfig, InboundSettings, OutboundConfig, RoutingRule};
+use jets::app::config::{DnsServer, InboundConfig, OutboundConfig, RoutingRule};
 use jets::app::env_vars::RESOURCES_DIR;
 use jets::app::{App, Config};
 
@@ -23,28 +23,30 @@ fn main() -> std::io::Result<()> {
     // config.log.access = Some("access.log".to_string());
 
     let mut socks_inbound = InboundConfig::new_socks("127.0.0.1", 1080);
-    socks_inbound.settings = InboundSettings::Socks {
+    socks_inbound.settings = jets::app::config::InboundSettings::Socks {
         auth: Default::default(),
         accounts: vec![],
         udp: true,
     };
     config.inbounds.push(socks_inbound);
-    config
-        .inbounds
-        .push(InboundConfig::new_http("127.0.0.1", 1090));
     // config
     //     .inbounds
-    //     .push(InboundConfig::new_tun("wintun", Some("198.18.0.1/24")));
+    //     .push(InboundConfig::new_http("127.0.0.1", 1090));
+    // config
+    //     .inbounds
+    //     .push(InboundConfig::new_tun("wintun", "198.18.0.2/24", "198.18.0.1"));
 
     // config
     //     .outbounds
     //     .push(OutboundConfig::new_socks("127.0.0.1", 18000));
-    // config.outbounds.push(OutboundConfig::new_shadowsocks(
+    // let mut ss_outbound = OutboundConfig::new_shadowsocks(
     //     "ss_server",
     //     1234,
     //     jets::app::config::CipherKind::AEAD2022_BLAKE3_AES_256_GCM,
     //     "ss_pass",
-    // ));
+    // );
+    // ss_outbound.stream_settings.sockopt.interface = Some("WiFi".to_string());
+    // config.outbounds.push(ss_outbound);
     // config.outbounds.push(OutboundConfig::new_trojan(
     //     "trojan_server",
     //     1234,
