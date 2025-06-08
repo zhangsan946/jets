@@ -7,7 +7,7 @@
 A Rust rule-based tunnel targeting to enduser for secure & reliable network access in high speed.
 
 ## Features
-This project is still in the very early development stage. Welcome anyone interested to join.
+This project still has many features to be implemented. Welcome anyone interested to PR to accelerate.
 
 ✅ Implemented 🚧 Under construction ❌ Not yet implemented
 
@@ -17,9 +17,10 @@ This project is still in the very early development stage. Welcome anyone intere
 	- ✅ tun
 
 - Outbound
-	- freedom
+	- ✅ freedom
+	- ✅ blackhole
 	- socks(✅ socks5)
-	- vless(✅ v2fly, ✅ xtls)
+	- vless(✅ v2fly, ✅ xtls-vision)
 	- ✅ shadowsocks
 	- ✅ trojan
 	- ❌ vmess
@@ -27,7 +28,7 @@ This project is still in the very early development stage. Welcome anyone intere
 - Routing
 	- ✅ InboundTag, Ip, Domain
 	- ❌ source, protocol, balancerTag
-	- ✅ AsIs, IPIfNonMatch & IPOnDemand
+	- ✅ AsIs, IPIfNonMatch, IPOnDemand
 
 - DNS
 	- ✅ UDP
@@ -35,16 +36,17 @@ This project is still in the very early development stage. Welcome anyone intere
 	- ❌ doh/doq/dot
 
 - Transport
-	- ✅ raw
-	- ✅ tls ❌ config, e.g. server name, certificate, ...
+	- ✅ raw/tcp
+	- ✅ tls
 	- ❌ reality
-	- ❌ http, websocket, gprc
+	- ❌ http, websocket, gprc, xhttp, ...
 
 - Other
 	- ✅ Connection option, e.g. bind interface, tcp fast open, ...
-	- ❌ Connection pool and retry logic
-	- ❌ socks & http authentication
 	- ✅ UDP Full Cone
+	- ❌ Connection retry logic
+	- ❌ socks & http authentication
+	- ❌ tls config, e.g. server name, certificate, ...
 	- ❌ fakedns
 	- ❌ more protocols & configurations
 
@@ -83,7 +85,7 @@ the same directory as `jets.exe` and run as administrator.
 
 ## Limitation
 1. Shadowsocks using 2022 cipher doesn't support password containing '-'.
-2. It is not able to get system dns config on Android. May refer to https://github.com/hickory-dns/hickory-dns/issues/652#issuecomment-1783178552 for possbile workaround.
+2. On Android, it cannot get system dns config which means config of `localhost` in dns servers won't work. May refer to https://github.com/hickory-dns/hickory-dns/issues/652#issuecomment-1783178552 for possbile workaround.
 
 ## Credits
 1. [shadowsocks-rust](https://github.com/shadowsocks/shadowsocks-rust)
