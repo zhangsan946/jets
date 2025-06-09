@@ -282,7 +282,7 @@ where
                         buf.put_slice(buffer);
                         if let Some(bytes_left) = bytes_left {
                             log::debug!(
-                                "{} Xtls package has {} bytes remaining after unpadding ",
+                                "{} Xtls package has {} bytes remaining after unpadding",
                                 this.traffic_state.stream_id,
                                 bytes_left.len()
                             );

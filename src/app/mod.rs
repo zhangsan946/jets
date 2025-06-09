@@ -23,7 +23,6 @@ use std::io::{Error, Result};
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::io::{AsyncRead, AsyncWrite};
-use tokio::runtime::Runtime;
 use tokio::sync::mpsc;
 use utils::{create_abort_signal, ServerHandle};
 
@@ -144,9 +143,9 @@ impl App {
             .init()
             .map_err(|e| invalid_input_error(format!("Failed to init logger: {}", e)))?;
 
-        //let mut builder = tokio::runtime::Builder::new_current_thread();
-        //let rt = builder.enable_all().build()?;
-        let rt = Runtime::new()?;
+        // let mut builder = tokio::runtime::Builder::new_current_thread();
+        // let rt = builder.enable_all().build()?;
+        let rt = tokio::runtime::Runtime::new()?;
 
         let future = async {
             let app = Self::new(config).await?;

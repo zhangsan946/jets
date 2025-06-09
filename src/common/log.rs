@@ -157,8 +157,8 @@ impl Log for Logger {
             if target == JETS_ACCESS_LIST {
                 let message = format!("{} {}\r\n", timestamp, record.args());
                 match &self.access_target {
-                    WritableTarget::Stdout => println!("{}", message),
-                    WritableTarget::Stderr => eprintln!("{}", message),
+                    WritableTarget::Stdout => print!("{}", message),
+                    WritableTarget::Stderr => eprint!("{}", message),
                     WritableTarget::Pipe(pipe) => {
                         let mut stream = pipe.lock().expect("no panics while held");
                         let _ = stream.write_all(message.as_bytes());
