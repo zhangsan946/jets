@@ -89,7 +89,7 @@ pub struct SocketOption {
     pub mark: Option<u32>,
     pub interface: Option<String>,
     pub bind_addr: Option<String>,
-    pub tcp_keep_alive_interval: Option<u32>,
+    pub tcp_keep_alive_interval: Option<u64>,
     pub tcp_fast_open: bool,
     pub tcp_no_delay: bool,
     pub tcp_mptcp: bool,
@@ -108,7 +108,7 @@ impl Default for SocketOption {
             bind_addr: None,
             // https://github.com/shadowsocks/shadowsocks-rust/blob/22791eed3cb32425fed831c44f8bb644051c74ce/crates/shadowsocks-service/src/local/mod.rs#L148
             // https://github.com/shadowsocks/shadowsocks-rust/blob/22791eed3cb32425fed831c44f8bb644051c74ce/crates/shadowsocks-service/src/local/mod.rs#L162
-            tcp_keep_alive_interval: Some(TCP_DEFAULT_KEEPALIVE_TIMEOUT.as_secs() as u32),
+            tcp_keep_alive_interval: Some(TCP_DEFAULT_KEEPALIVE_TIMEOUT.as_secs()),
             tcp_fast_open: false,
             tcp_no_delay: false,
             tcp_mptcp: false,
@@ -130,7 +130,7 @@ impl From<SocketOption> for TcpSocketOpts {
             fastopen: value.tcp_fast_open,
             keepalive: value
                 .tcp_keep_alive_interval
-                .map(|v| Duration::from_secs(v as u64)),
+                .map(|v| Duration::from_secs(v)),
             mptcp: value.tcp_mptcp,
         }
     }
