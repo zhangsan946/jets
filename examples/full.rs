@@ -98,5 +98,5 @@ fn main() -> std::io::Result<()> {
     let dns_server = DnsServer::new("localhost".to_string())?;
     config.dns.servers.push(dns_server);
 
-    App::run(config)
+    App::run(config, None)
 }

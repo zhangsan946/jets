@@ -4,6 +4,8 @@ pub mod addons {
 pub mod stream;
 pub mod xtls;
 
+#[cfg(unix)]
+use super::FdProtecter;
 use super::{request_command, Outbound, ProxySocket, ProxyStream};
 use crate::app::config::{OutboundProtocolOption, TlsSettings, VlessFlow};
 use crate::app::dns::DnsManager;
@@ -43,8 +45,10 @@ pub struct VlessOutbound {
     addr: Address,
     id: Uuid,
     flow: VlessFlow,
-    connect_opts: ConnectOpts,
     tls: Tls,
+    connect_opts: ConnectOpts,
+    #[cfg(unix)]
+    protecter: Option<FdProtecter>,
 }
 
 impl VlessOutbound {
@@ -54,14 +58,17 @@ impl VlessOutbound {
         flow: VlessFlow,
         tls_settings: TlsSettings,
         connect_opts: ConnectOpts,
+        #[cfg(unix)] protecter: Option<FdProtecter>,
     ) -> Result<Self> {
         let tls = Tls::new(tls_settings, &addr)?;
         Ok(Self {
             addr,
             id,
             flow,
-            connect_opts,
             tls,
+            connect_opts,
+            #[cfg(unix)]
+            protecter,
         })
     }
 }
@@ -89,8 +96,10 @@ impl Outbound for VlessOutbound {
             .tls
             .connect(
                 server_addr,
-                &self.connect_opts,
                 self.flow != VlessFlow::None,
+                &self.connect_opts,
+                #[cfg(unix)]
+                &self.protecter,
             )
             .await?;
 
@@ -123,8 +132,10 @@ impl Outbound for VlessOutbound {
             .tls
             .connect(
                 server_addr,
-                &self.connect_opts,
                 false, //?
+                &self.connect_opts,
+                #[cfg(unix)]
+                &self.protecter,
             )
             .await?;
 

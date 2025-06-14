@@ -1,3 +1,5 @@
+#[cfg(unix)]
+use super::FdProtecter;
 use super::{Outbound, ProxySocket, ProxyStream};
 use crate::app::config::{OutboundProtocolOption, TlsSettings};
 use crate::app::dns::DnsManager;
@@ -96,8 +98,10 @@ impl<'a> TrojanHandshake<'a> {
 pub struct TrojanOutbound {
     addr: Address,
     password: String,
-    connect_opts: ConnectOpts,
     tls: Tls,
+    connect_opts: ConnectOpts,
+    #[cfg(unix)]
+    protecter: Option<FdProtecter>,
 }
 
 impl TrojanOutbound {
@@ -106,6 +110,7 @@ impl TrojanOutbound {
         password: String,
         tls_settings: TlsSettings,
         connect_opts: ConnectOpts,
+        #[cfg(unix)] protecter: Option<FdProtecter>,
     ) -> Result<Self> {
         let tls = Tls::new(tls_settings, &addr)?;
         let password = Sha224::digest(password.as_bytes());
@@ -115,6 +120,8 @@ impl TrojanOutbound {
             password,
             connect_opts,
             tls,
+            #[cfg(unix)]
+            protecter,
         })
     }
 }
@@ -140,7 +147,13 @@ impl Outbound for TrojanOutbound {
         let server_addr = pre_check_addr!(self.addr);
         let mut stream = self
             .tls
-            .connect(server_addr, &self.connect_opts, false)
+            .connect(
+                server_addr,
+                false,
+                &self.connect_opts,
+                #[cfg(unix)]
+                &self.protecter,
+            )
             .await?;
 
         let handshake = TrojanHandshake::new(&addr, &self.password, request_command::TCP);
@@ -155,7 +168,13 @@ impl Outbound for TrojanOutbound {
         let server_addr = pre_check_addr!(self.addr);
         let mut stream = self
             .tls
-            .connect(server_addr, &self.connect_opts, false)
+            .connect(
+                server_addr,
+                false,
+                &self.connect_opts,
+                #[cfg(unix)]
+                &self.protecter,
+            )
             .await?;
 
         let handshake = TrojanHandshake::new(&target, &self.password, request_command::UDP);

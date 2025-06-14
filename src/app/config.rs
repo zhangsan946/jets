@@ -128,9 +128,7 @@ impl From<SocketOption> for TcpSocketOpts {
             recv_buffer_size: value.tcp_recv_buffer_size,
             nodelay: value.tcp_no_delay,
             fastopen: value.tcp_fast_open,
-            keepalive: value
-                .tcp_keep_alive_interval
-                .map(|v| Duration::from_secs(v)),
+            keepalive: value.tcp_keep_alive_interval.map(Duration::from_secs),
             mptcp: value.tcp_mptcp,
         }
     }

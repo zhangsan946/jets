@@ -1,6 +1,8 @@
 use super::raw::{ConnectOpts, TcpStream};
 use crate::app::config::TlsSettings;
 use crate::common::{invalid_data_error, invalid_input_error, Address};
+#[cfg(unix)]
+use crate::proxy::FdProtecter;
 use crate::proxy::{AsTcpStream, LocalAddr};
 use futures::ready;
 use once_cell::sync::Lazy;
@@ -10,6 +12,8 @@ use rustls_pki_types::ServerName;
 use std::future::poll_fn;
 use std::io::{BufRead, Error, ErrorKind, Read, Result, Write};
 use std::net::SocketAddr;
+#[cfg(unix)]
+use std::os::fd::AsRawFd;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
@@ -72,10 +76,15 @@ impl Tls {
     pub async fn connect(
         &self,
         addr: &SocketAddr,
-        connect_opts: &ConnectOpts,
         xtls: bool,
+        connect_opts: &ConnectOpts,
+        #[cfg(unix)] protecter: &Option<FdProtecter>,
     ) -> Result<TlsStream> {
         let conn = TcpStream::connect_with_opts(addr, connect_opts).await?;
+        #[cfg(unix)]
+        if let Some(protecter) = protecter {
+            protecter.protect(conn.as_raw_fd());
+        }
         let session = ClientConnection::new(self.tls_config.clone(), self.server_name.clone())
             .map_err(|e| Error::other(format!("Unable to create tls session: {}", e)))?;
         let mut tls_stream = TlsStream::new(conn, session, xtls);

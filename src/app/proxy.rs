@@ -9,6 +9,8 @@ use crate::common::{invalid_input_error, Address};
 use crate::proxy::http::HttpInbound;
 #[cfg(feature = "outbound-trojan")]
 use crate::proxy::trojan::TrojanOutbound;
+#[cfg(unix)]
+use crate::proxy::FdProtecter;
 use crate::proxy::{
     blackhole::BlackholeOutbound,
     freedom::FreedomOutbound,
@@ -59,12 +61,19 @@ pub struct Outbounds {
 }
 
 impl Outbounds {
-    pub fn new(outbounds: Vec<OutboundConfig>) -> Result<Self> {
+    pub fn new(
+        outbounds: Vec<OutboundConfig>,
+        #[cfg(unix)] protecter: Option<FdProtecter>,
+    ) -> Result<Self> {
         let mut inner: HashMap<String, Arc<Box<dyn Outbound>>> = HashMap::new();
         let mut freedom: Option<Arc<Box<dyn Outbound>>> = None;
         for (index, outbound) in outbounds.into_iter().enumerate() {
             let tag = outbound.tag.clone();
-            let outbound = Arc::new(parse_outbound(outbound)?);
+            let outbound = Arc::new(parse_outbound(
+                outbound,
+                #[cfg(unix)]
+                protecter.clone(),
+            )?);
             if index == 0 {
                 inner.insert(DEFAULT_OUTBOUND_TAG.to_string(), outbound.clone());
             }
@@ -174,12 +183,15 @@ fn parse_inbound(inbound: InboundConfig) -> Result<Box<dyn Inbound>> {
             } = inbound.settings
             {
                 let sniffer = Sniffer::from(inbound.sniffing);
-                #[cfg(not(unix))]
-                let tun_inbound =
-                    TunInbound::new(name, address, destination, accept_opts, sniffer)?;
-                #[cfg(unix)]
-                let tun_inbound =
-                    TunInbound::new(name, address, destination, fd, accept_opts, sniffer)?;
+                let tun_inbound = TunInbound::new(
+                    name,
+                    address,
+                    destination,
+                    #[cfg(unix)]
+                    fd,
+                    accept_opts,
+                    sniffer,
+                )?;
                 Ok(Box::new(tun_inbound) as Box<dyn Inbound>)
             } else {
                 Err(invalid_input_error("invalid tun inbound settings"))
@@ -193,13 +205,18 @@ fn parse_inbound(inbound: InboundConfig) -> Result<Box<dyn Inbound>> {
     }
 }
 
-fn parse_outbound(outbound: OutboundConfig) -> Result<Box<dyn Outbound>> {
+fn parse_outbound(
+    outbound: OutboundConfig,
+    #[cfg(unix)] protecter: Option<FdProtecter>,
+) -> Result<Box<dyn Outbound>> {
     let connect_opts = ConnectOpts::try_from(outbound.stream_settings.sockopt)?;
     match outbound.protocol {
         OutboundProtocolOption::Blackhole => Ok(Box::new(BlackholeOutbound) as Box<dyn Outbound>),
-        OutboundProtocolOption::Freedom => {
-            Ok(Box::new(FreedomOutbound::new(connect_opts)) as Box<dyn Outbound>)
-        }
+        OutboundProtocolOption::Freedom => Ok(Box::new(FreedomOutbound::new(
+            connect_opts,
+            #[cfg(unix)]
+            protecter,
+        )) as Box<dyn Outbound>),
         OutboundProtocolOption::Shadowsocks => {
             if let OutboundSettings::Shadowsocks { mut servers } = outbound.settings {
                 if !servers.is_empty() {
@@ -241,6 +258,8 @@ fn parse_outbound(outbound: OutboundConfig) -> Result<Box<dyn Outbound>> {
                         server.password,
                         outbound.stream_settings.tls_settings,
                         connect_opts,
+                        #[cfg(unix)]
+                        protecter,
                     )?;
                     return Ok(Box::new(outbound) as Box<dyn Outbound>);
                 }
@@ -265,6 +284,8 @@ fn parse_outbound(outbound: OutboundConfig) -> Result<Box<dyn Outbound>> {
                         user.flow,
                         outbound.stream_settings.tls_settings,
                         connect_opts,
+                        #[cfg(unix)]
+                        protecter,
                     )?;
                     return Ok(Box::new(outbound) as Box<dyn Outbound>);
                 }

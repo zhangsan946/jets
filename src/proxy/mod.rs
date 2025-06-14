@@ -177,6 +177,51 @@ pub trait ProxySocket: Send + Sync + Unpin {
     // }
 }
 
+trait CloneFn: Fn(i32) + Send + Sync {
+    fn clone_box(&self) -> Box<dyn CloneFn>;
+}
+
+impl<F: Clone + Send + Sync + 'static> CloneFn for F
+where
+    F: Fn(i32),
+{
+    fn clone_box(&self) -> Box<dyn CloneFn> {
+        Box::new(self.clone())
+    }
+}
+
+pub struct FdProtecter {
+    func: Box<dyn CloneFn>,
+}
+
+impl FdProtecter {
+    pub fn new<F: Fn(i32) + Send + Sync + Clone + 'static>(func: F) -> Self {
+        Self {
+            func: Box::new(func),
+        }
+    }
+
+    pub fn protect(&self, code: i32) {
+        (self.func)(code);
+    }
+}
+
+impl Clone for FdProtecter {
+    fn clone(&self) -> Self {
+        Self {
+            func: self.func.clone_box(),
+        }
+    }
+}
+
+impl std::fmt::Debug for FdProtecter {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("FdProtecter")
+            .field("func", &"Box<dyn CloneFn>")
+            .finish()
+    }
+}
+
 #[async_trait]
 pub trait Inbound: Send + Sync {
     fn clone_box(&self) -> Box<dyn Inbound>;
