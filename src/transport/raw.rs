@@ -4,6 +4,8 @@ use crate::proxy::{LocalAddr, ProxySocket};
 pub use shadowsocks::net::{AcceptOpts, TcpListener};
 // For outbound
 pub use shadowsocks::net::{ConnectOpts, TcpSocketOpts, TcpStream, UdpSocket, UdpSocketOpts};
+#[cfg(target_os = "android")]
+pub use shadowsocks::net::SocketProtector;
 use std::io::Result;
 use std::net::SocketAddr;
 use std::task::{Context, Poll};

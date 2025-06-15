@@ -13,6 +13,8 @@ use crate::app::config::OutboundProtocolOption;
 use crate::common::log::{Logger, Target, JETS_ACCESS_LIST};
 use crate::common::{copy_bidirectional, invalid_data_error, invalid_input_error, Address};
 use crate::proxy::{Outbound, ProxySocket, ProxyStream};
+#[cfg(target_os = "android")]
+use crate::transport::raw::SocketProtector;
 pub use config::Config;
 use dns::DnsManager;
 use futures::{future, FutureExt};
@@ -38,9 +40,16 @@ pub struct App {
 }
 
 impl App {
-    pub async fn new(config: Config) -> Result<Self> {
+    pub async fn new(
+        config: Config,
+        #[cfg(target_os = "android")] protector: Option<SocketProtector>,
+    ) -> Result<Self> {
         let inbounds = Inbounds::new(config.inbounds)?;
-        let mut outbounds = Outbounds::new(config.outbounds)?;
+        let mut outbounds = Outbounds::new(
+            config.outbounds,
+            #[cfg(target_os = "android")]
+            protector,
+        )?;
         let router = Router::new(config.routing)?;
         router.validate(&outbounds)?;
         let dns = DnsManager::new(config.dns.clone(), &outbounds, &router).await?;
@@ -120,7 +129,10 @@ impl App {
         res
     }
 
-    pub fn run(config: Config) -> Result<()> {
+    pub fn run(
+        config: Config,
+        #[cfg(target_os = "android")] protector: Option<SocketProtector>,
+    ) -> Result<()> {
         let error_target = if let Some(ref error_file) = config.log.error {
             let file = std::fs::OpenOptions::new()
                 .create(true)
@@ -148,7 +160,12 @@ impl App {
         let rt = tokio::runtime::Runtime::new()?;
 
         let future = async {
-            let app = Self::new(config).await?;
+            let app = Self::new(
+                config,
+                #[cfg(target_os = "android")]
+                protector,
+            )
+            .await?;
 
             let server = app.serve(None).fuse();
             let abort_signal = create_abort_signal().fuse();

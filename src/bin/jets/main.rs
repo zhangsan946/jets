@@ -19,5 +19,9 @@ fn main() -> Result<()> {
     }
     let args = Args::parse();
     let config = Config::load(args.get_config()?)?;
-    App::run(config)
+    App::run(
+        config,
+        #[cfg(target_os = "android")]
+        None,
+    )
 }

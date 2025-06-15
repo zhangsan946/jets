@@ -2352,8 +2352,7 @@ dependencies = [
 [[package]]
 name = "shadowsocks"
 version = "1.23.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e78db9c9912c90ea7487f49bc149b329b535806bfa12b740fbade73f573a3d9f"
+source = "git+https://github.com/zhangsan946/shadowsocks-rust.git?rev=1081311ada4119247e29c0388832f4de8f08ff82#1081311ada4119247e29c0388832f4de8f08ff82"
 dependencies = [
  "aes",
  "arc-swap",
@@ -2370,7 +2369,6 @@ dependencies = [
  "log",
  "lru_time_cache",
  "notify",
- "once_cell",
  "percent-encoding",
  "pin-project",
  "rand",
