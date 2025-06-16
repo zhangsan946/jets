@@ -2,7 +2,8 @@ use super::{LocalAddr, Outbound, ProxySocket, ProxyStream};
 use crate::app::config::OutboundProtocolOption;
 use crate::app::dns::DnsManager;
 use crate::common::{invalid_data_error, invalid_input_error, Address};
-use crate::transport::raw::{ConnectOpts, UdpSocket};
+use crate::transport::raw::{TcpStream, UdpSocket};
+use crate::transport::TransportSettings;
 use async_trait::async_trait;
 use rand::rngs::SmallRng;
 use rand::{Rng, SeedableRng};
@@ -37,7 +38,7 @@ pub fn generate_client_session_id() -> u64 {
 #[derive(Clone, Debug)]
 pub struct ShadowsocksOutbound {
     server_config: ServerConfig,
-    connect_opts: ConnectOpts,
+    transport_settings: TransportSettings,
     context: SharedContext,
 }
 
@@ -46,20 +47,20 @@ impl ShadowsocksOutbound {
         addr: Address,
         password: String,
         method: CipherKind,
-        connect_opts: ConnectOpts,
+        transport_settings: TransportSettings,
     ) -> Result<Self> {
         let server_config =
             ServerConfig::new(addr, password, method).map_err(invalid_input_error)?;
         Ok(Self {
             server_config,
-            connect_opts,
+            transport_settings,
             context: Context::new_shared(ServerType::Local),
         })
     }
 }
 
-impl LocalAddr for ProxyClientStream<crate::transport::raw::TcpStream> {
-    fn local_addr(&self) -> Result<std::net::SocketAddr> {
+impl LocalAddr for ProxyClientStream<TcpStream> {
+    fn local_addr(&self) -> Result<SocketAddr> {
         self.get_ref().local_addr()
     }
 }
@@ -88,7 +89,7 @@ impl Outbound for ShadowsocksOutbound {
             self.context.clone(),
             &self.server_config,
             addr,
-            &self.connect_opts,
+            self.transport_settings.get_connect_opts(),
         )
         .await?;
         Ok(Box::new(stream) as Box<dyn ProxyStream>)
@@ -98,7 +99,7 @@ impl Outbound for ShadowsocksOutbound {
         let socket = SsProxySocket::connect_with_opts(
             self.context.clone(),
             &self.server_config,
-            &self.connect_opts,
+            self.transport_settings.get_connect_opts(),
         )
         .await?;
         Ok(Box::new(SsSocket {

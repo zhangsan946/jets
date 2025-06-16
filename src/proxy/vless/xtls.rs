@@ -154,8 +154,8 @@ enum ReadState {
 
 // https://github.com/XTLS/Xray-core/discussions/1295
 // https://github.com/e1732a364fed/xtls-?tab=readme-ov-file#%E6%80%BB%E7%BB%93-xtls%E7%9A%84%E5%8E%9F%E7%90%86
-pub(crate) struct VisionStream<S> {
-    stream: S,
+pub(crate) struct VisionStream {
+    stream: Box<dyn ProxyStream>,
     traffic_state: TrafficState,
 
     // for read
@@ -168,20 +168,14 @@ pub(crate) struct VisionStream<S> {
     write_buffer: BytesMut,
 }
 
-impl<S> LocalAddr for VisionStream<S>
-where
-    S: ProxyStream,
-{
+impl LocalAddr for VisionStream {
     fn local_addr(&self) -> Result<SocketAddr> {
         self.stream.local_addr()
     }
 }
 
-impl<S> VisionStream<S>
-where
-    S: ProxyStream,
-{
-    pub fn new(stream: S, id: Uuid, stream_id: u32) -> Self {
+impl VisionStream {
+    pub fn new(stream: Box<dyn ProxyStream>, id: Uuid, stream_id: u32) -> Self {
         Self {
             stream,
             traffic_state: TrafficState::new(stream_id, id),
@@ -195,15 +189,12 @@ where
         }
     }
 
-    pub fn as_raw_stream(&mut self) -> &mut S {
-        &mut self.stream
+    pub fn as_mut_ref(&mut self) -> &mut dyn ProxyStream {
+        self.stream.as_mut()
     }
 }
 
-impl<S> AsyncRead for VisionStream<S>
-where
-    S: ProxyStream,
-{
+impl AsyncRead for VisionStream {
     fn poll_read(
         self: Pin<&mut Self>,
         cx: &mut Context<'_>,
@@ -305,10 +296,7 @@ where
     }
 }
 
-impl<S> AsyncWrite for VisionStream<S>
-where
-    S: ProxyStream,
-{
+impl AsyncWrite for VisionStream {
     // https://github.com/XTLS/Xray-core/blob/6b6fbcb459a870c5c5cda17ed0f6886d39b9a6cf/proxy/proxy.go#L222
     fn poll_write(self: Pin<&mut Self>, cx: &mut Context<'_>, buf: &[u8]) -> Poll<Result<usize>> {
         let this = self.get_mut();

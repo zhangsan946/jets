@@ -9,7 +9,8 @@ use crate::app::Context as AppContext;
 use crate::common::{copy_bidirectional, invalid_data_error, Address, MAXIMUM_UDP_PAYLOAD_SIZE};
 use crate::pre_check_addr;
 use crate::proxy::net_manager::NatManager;
-use crate::transport::raw::{ConnectOpts, TcpStream, UdpSocket};
+use crate::transport::raw::UdpSocket;
+use crate::transport::TransportSettings;
 use async_trait::async_trait;
 use bytes::{BufMut, BytesMut};
 use futures::ready;
@@ -258,26 +259,33 @@ impl UdpInboundWrite for Socks5UdpInboundWriter {
 pub struct Socks5Outbound {
     addr: Address,
     accounts: HashMap<String, String>,
-    connect_opts: ConnectOpts,
+    transport_settings: TransportSettings,
 }
 
 impl Socks5Outbound {
-    pub fn new(addr: Address, accounts: Vec<SocksUser>, connect_opts: ConnectOpts) -> Self {
+    pub fn new(
+        addr: Address,
+        accounts: Vec<SocksUser>,
+        transport_settings: TransportSettings,
+    ) -> Self {
         let accounts: HashMap<_, _> = accounts.into_iter().map(|s| (s.user, s.pass)).collect();
         Self {
             addr,
             accounts,
-            connect_opts,
+            transport_settings,
         }
     }
 
     pub async fn connect(
         &self,
-        addr: &SocketAddr,
+        server_addr: &SocketAddr,
         command: Command,
         target: Address,
-    ) -> Result<(TcpResponseHeader, TcpStream)> {
-        let mut stream = TcpStream::connect_with_opts(addr, &self.connect_opts).await?;
+    ) -> Result<(TcpResponseHeader, Box<dyn ProxyStream>)> {
+        let mut stream = self
+            .transport_settings
+            .connect_tcp(server_addr, false)
+            .await?;
 
         let mut auth_method = socks5::SOCKS5_AUTH_METHOD_NONE;
         if !self.accounts.is_empty() {
@@ -327,7 +335,6 @@ impl Outbound for Socks5Outbound {
         match response.reply {
             Reply::Succeeded => {
                 log::debug!("Connected to socks5 tcp server: {}", response.address);
-                let stream: Box<dyn ProxyStream> = Box::new(stream);
                 Ok(stream)
             }
             reply => Err(invalid_data_error(format!(
@@ -339,7 +346,11 @@ impl Outbound for Socks5Outbound {
 
     async fn bind(&self, _peer: SocketAddr, _target: Address) -> Result<Box<dyn ProxySocket>> {
         let server_addr = pre_check_addr!(self.addr);
-        let socket = UdpSocket::connect_any_with_opts(server_addr, &self.connect_opts).await?;
+        let socket = UdpSocket::connect_any_with_opts(
+            server_addr,
+            self.transport_settings.get_connect_opts(),
+        )
+        .await?;
         let addr = socket.local_addr()?;
         let (response, stream) = self
             .connect(server_addr, Command::UdpAssociate, addr.into())
@@ -368,11 +379,11 @@ impl Outbound for Socks5Outbound {
 pub struct Socks5Socket {
     socket: UdpSocket,
     // Socks5 protocol requires to keep the TcpStream open
-    _stream: TcpStream,
+    _stream: Box<dyn ProxyStream>,
 }
 
 impl Socks5Socket {
-    pub fn new(socket: UdpSocket, _stream: TcpStream) -> Self {
+    pub fn new(socket: UdpSocket, _stream: Box<dyn ProxyStream>) -> Self {
         Self { socket, _stream }
     }
 }

@@ -18,9 +18,10 @@ use crate::proxy::{
     vless::VlessOutbound,
 };
 use crate::proxy::{Inbound, Outbound};
+use crate::transport::raw::AcceptOpts;
 #[cfg(target_os = "android")]
 use crate::transport::raw::SocketProtector;
-use crate::transport::raw::{AcceptOpts, ConnectOpts};
+use crate::transport::TransportSettings;
 use std::collections::{HashMap, HashSet};
 use std::io::{Error, ErrorKind, Result};
 use std::net::SocketAddr;
@@ -209,20 +210,14 @@ fn parse_outbound(
     outbound: OutboundConfig,
     #[cfg(target_os = "android")] protector: Option<SocketProtector>,
 ) -> Result<Box<dyn Outbound>> {
-    #[cfg(not(target_os = "android"))]
-    let connect_opts = ConnectOpts::try_from(outbound.stream_settings.sockopt)?;
-
-    #[cfg(target_os = "android")]
-    let connect_opts = {
-        let mut opts = ConnectOpts::try_from(outbound.stream_settings.sockopt)?;
-        opts.vpn_socket_protector = protector;
-        opts
-    };
-
     match outbound.protocol {
         OutboundProtocolOption::Blackhole => Ok(Box::new(BlackholeOutbound) as Box<dyn Outbound>),
         OutboundProtocolOption::Freedom => {
-            Ok(Box::new(FreedomOutbound::new(connect_opts)) as Box<dyn Outbound>)
+            // There is no proxy server for freedom outbound
+            // Just create one, and it doesn't really matter what it is
+            let dummy = Address::DomainNameAddress("localhost".to_string(), 0);
+            let transport_settings = TransportSettings::new(outbound.stream_settings, &dummy)?;
+            Ok(Box::new(FreedomOutbound::new(transport_settings)) as Box<dyn Outbound>)
         }
         OutboundProtocolOption::Shadowsocks => {
             if let OutboundSettings::Shadowsocks { mut servers } = outbound.settings {
@@ -230,11 +225,13 @@ fn parse_outbound(
                     let server = servers.remove(0);
                     let addr = format!("{}:{}", server.address, server.port);
                     let addr = Address::from_str(&addr).map_err(|_| invalid_input_error(addr))?;
+                    let transport_settings =
+                        TransportSettings::new(outbound.stream_settings, &addr)?;
                     let outbound = ShadowsocksOutbound::new(
                         addr,
                         server.password,
                         server.method,
-                        connect_opts,
+                        transport_settings,
                     )?;
                     return Ok(Box::new(outbound) as Box<dyn Outbound>);
                 }
@@ -247,7 +244,9 @@ fn parse_outbound(
                     let server = servers.remove(0);
                     let addr = format!("{}:{}", server.address, server.port);
                     let addr = Address::from_str(&addr).map_err(|_| invalid_input_error(addr))?;
-                    let outbound = Socks5Outbound::new(addr, server.users, connect_opts);
+                    let transport_settings =
+                        TransportSettings::new(outbound.stream_settings, &addr)?;
+                    let outbound = Socks5Outbound::new(addr, server.users, transport_settings);
                     return Ok(Box::new(outbound) as Box<dyn Outbound>);
                 }
             }
@@ -260,12 +259,9 @@ fn parse_outbound(
                     let server = servers.remove(0);
                     let addr = format!("{}:{}", server.address, server.port);
                     let addr = Address::from_str(&addr).map_err(|_| invalid_input_error(addr))?;
-                    let outbound = TrojanOutbound::new(
-                        addr,
-                        server.password,
-                        outbound.stream_settings.tls_settings,
-                        connect_opts,
-                    )?;
+                    let transport_settings =
+                        TransportSettings::new(outbound.stream_settings, &addr)?;
+                    let outbound = TrojanOutbound::new(addr, server.password, transport_settings)?;
                     return Ok(Box::new(outbound) as Box<dyn Outbound>);
                 }
             }
@@ -282,14 +278,11 @@ fn parse_outbound(
                     let mut server = vnext.remove(0);
                     let addr = format!("{}:{}", server.address, server.port);
                     let addr = Address::from_str(&addr).map_err(|_| invalid_input_error(addr))?;
+                    let transport_settings =
+                        TransportSettings::new(outbound.stream_settings, &addr)?;
                     let user = server.users.remove(0);
-                    let outbound = VlessOutbound::new(
-                        addr,
-                        user.id,
-                        user.flow,
-                        outbound.stream_settings.tls_settings,
-                        connect_opts,
-                    )?;
+                    let outbound =
+                        VlessOutbound::new(addr, user.id, user.flow, transport_settings)?;
                     return Ok(Box::new(outbound) as Box<dyn Outbound>);
                 }
             }

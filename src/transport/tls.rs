@@ -1,4 +1,4 @@
-use super::raw::{ConnectOpts, TcpStream};
+use super::raw::TcpStream;
 use crate::app::config::TlsSettings;
 use crate::common::{invalid_data_error, invalid_input_error, Address};
 use crate::proxy::{AsTcpStream, LocalAddr};
@@ -69,13 +69,7 @@ impl Tls {
 }
 
 impl Tls {
-    pub async fn connect(
-        &self,
-        addr: &SocketAddr,
-        connect_opts: &ConnectOpts,
-        xtls: bool,
-    ) -> Result<TlsStream> {
-        let conn = TcpStream::connect_with_opts(addr, connect_opts).await?;
+    pub async fn connect(&self, conn: TcpStream, xtls: bool) -> Result<TlsStream> {
         let session = ClientConnection::new(self.tls_config.clone(), self.server_name.clone())
             .map_err(|e| Error::other(format!("Unable to create tls session: {}", e)))?;
         let mut tls_stream = TlsStream::new(conn, session, xtls);

@@ -85,6 +85,24 @@ impl Default for TlsSettings {
 
 #[derive(Clone, Debug, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
+pub struct WsSettings {
+    pub path: String,
+    pub host: String,
+    pub headers: HashMap<String, String>,
+}
+
+impl Default for WsSettings {
+    fn default() -> Self {
+        Self {
+            path: "/".to_string(),
+            host: "".to_string(),
+            headers: HashMap::new(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
 pub struct SocketOption {
     pub mark: Option<u32>,
     pub interface: Option<String>,
@@ -186,6 +204,7 @@ pub struct StreamSettings {
     pub network: NetworkOption,
     pub security: SecurityOption,
     pub tls_settings: TlsSettings,
+    pub ws_settings: WsSettings,
     pub sockopt: SocketOption,
 }
 
@@ -195,6 +214,7 @@ impl Default for StreamSettings {
             network: NetworkOption::Tcp,
             security: SecurityOption::None,
             tls_settings: TlsSettings::default(),
+            ws_settings: WsSettings::default(),
             sockopt: SocketOption::default(),
         }
     }
@@ -517,6 +537,7 @@ impl OutboundConfig {
                 password: password.into(),
             }],
         };
+        outbound.stream_settings.security = SecurityOption::Tls;
         outbound
     }
 
@@ -533,6 +554,7 @@ impl OutboundConfig {
                 }],
             }],
         };
+        outbound.stream_settings.security = SecurityOption::Tls;
         outbound
     }
 
