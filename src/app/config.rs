@@ -1,6 +1,8 @@
 use crate::common::log::JETS_ACCESS_LIST;
 use crate::common::{invalid_input_error, TCP_DEFAULT_KEEPALIVE_TIMEOUT};
 use crate::impl_display;
+#[cfg(target_os = "android")]
+use crate::transport::raw::SocketProtect;
 use crate::transport::raw::{AcceptOpts, ConnectOpts, TcpSocketOpts, UdpSocketOpts};
 use serde::de::{Deserializer, Error};
 use serde::{Deserialize, Serialize};
@@ -85,11 +87,29 @@ impl Default for TlsSettings {
 
 #[derive(Clone, Debug, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
+pub struct WsSettings {
+    pub path: String,
+    pub host: String,
+    pub headers: HashMap<String, String>,
+}
+
+impl Default for WsSettings {
+    fn default() -> Self {
+        Self {
+            path: "/".to_string(),
+            host: "".to_string(),
+            headers: HashMap::new(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
 pub struct SocketOption {
     pub mark: Option<u32>,
     pub interface: Option<String>,
     pub bind_addr: Option<String>,
-    pub tcp_keep_alive_interval: Option<u32>,
+    pub tcp_keep_alive_interval: Option<u64>,
     pub tcp_fast_open: bool,
     pub tcp_no_delay: bool,
     pub tcp_mptcp: bool,
@@ -98,6 +118,9 @@ pub struct SocketOption {
     pub udp_mtu: Option<usize>,
     pub udp_fragment: bool,
     pub v6_only: bool,
+    #[cfg(target_os = "android")]
+    #[serde(skip_deserializing)]
+    pub vpn_socket_protect: Option<std::sync::Arc<Box<dyn SocketProtect + Send + Sync>>>,
 }
 
 impl Default for SocketOption {
@@ -108,7 +131,7 @@ impl Default for SocketOption {
             bind_addr: None,
             // https://github.com/shadowsocks/shadowsocks-rust/blob/22791eed3cb32425fed831c44f8bb644051c74ce/crates/shadowsocks-service/src/local/mod.rs#L148
             // https://github.com/shadowsocks/shadowsocks-rust/blob/22791eed3cb32425fed831c44f8bb644051c74ce/crates/shadowsocks-service/src/local/mod.rs#L162
-            tcp_keep_alive_interval: Some(TCP_DEFAULT_KEEPALIVE_TIMEOUT.as_secs() as u32),
+            tcp_keep_alive_interval: Some(TCP_DEFAULT_KEEPALIVE_TIMEOUT.as_secs()),
             tcp_fast_open: false,
             tcp_no_delay: false,
             tcp_mptcp: false,
@@ -117,6 +140,8 @@ impl Default for SocketOption {
             udp_mtu: None,
             udp_fragment: false,
             v6_only: false,
+            #[cfg(target_os = "android")]
+            vpn_socket_protect: None,
         }
     }
 }
@@ -128,9 +153,7 @@ impl From<SocketOption> for TcpSocketOpts {
             recv_buffer_size: value.tcp_recv_buffer_size,
             nodelay: value.tcp_no_delay,
             fastopen: value.tcp_fast_open,
-            keepalive: value
-                .tcp_keep_alive_interval
-                .map(|v| Duration::from_secs(v as u64)),
+            keepalive: value.tcp_keep_alive_interval.map(Duration::from_secs),
             mptcp: value.tcp_mptcp,
         }
     }
@@ -173,14 +196,16 @@ impl TryFrom<SocketOption> for ConnectOpts {
         Ok(ConnectOpts {
             #[cfg(any(target_os = "linux", target_os = "android"))]
             fwmark: value.mark,
-            #[cfg(target_os = "freebsd")]
-            user_cookie: None,
-            #[cfg(target_os = "android")]
-            vpn_protect_path: None,
             bind_local_addr,
             bind_interface: value.interface,
             tcp,
             udp,
+            #[cfg(target_os = "freebsd")]
+            user_cookie: None,
+            #[cfg(target_os = "android")]
+            vpn_protect_path: None,
+            #[cfg(target_os = "android")]
+            vpn_socket_protect: value.vpn_socket_protect,
         })
     }
 }
@@ -191,6 +216,7 @@ pub struct StreamSettings {
     pub network: NetworkOption,
     pub security: SecurityOption,
     pub tls_settings: TlsSettings,
+    pub ws_settings: WsSettings,
     pub sockopt: SocketOption,
 }
 
@@ -200,6 +226,7 @@ impl Default for StreamSettings {
             network: NetworkOption::Tcp,
             security: SecurityOption::None,
             tls_settings: TlsSettings::default(),
+            ws_settings: WsSettings::default(),
             sockopt: SocketOption::default(),
         }
     }
@@ -522,6 +549,7 @@ impl OutboundConfig {
                 password: password.into(),
             }],
         };
+        outbound.stream_settings.security = SecurityOption::Tls;
         outbound
     }
 
@@ -538,6 +566,7 @@ impl OutboundConfig {
                 }],
             }],
         };
+        outbound.stream_settings.security = SecurityOption::Tls;
         outbound
     }
 

@@ -4,6 +4,8 @@ use crate::proxy::{LocalAddr, ProxySocket};
 pub use shadowsocks::net::{AcceptOpts, TcpListener};
 // For outbound
 pub use shadowsocks::net::{ConnectOpts, TcpSocketOpts, TcpStream, UdpSocket, UdpSocketOpts};
+#[cfg(target_os = "android")]
+pub use shadowsocks::net::{SocketProtect, SocketProtectFn};
 use std::io::Result;
 use std::net::SocketAddr;
 use std::task::{Context, Poll};
@@ -32,4 +34,13 @@ impl ProxySocket for UdpSocket {
             unreachable!()
         }
     }
+}
+
+#[cfg(target_os = "android")]
+pub fn make_socket_protect<F>(f: F) -> std::sync::Arc<Box<dyn SocketProtect + Send + Sync>>
+where
+    F: Fn(std::os::unix::io::RawFd) -> Result<()> + Send + Sync + 'static,
+{
+    let protect_fn = Box::new(SocketProtectFn { f }) as Box<dyn SocketProtect + Send + Sync>;
+    std::sync::Arc::new(protect_fn)
 }

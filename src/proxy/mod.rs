@@ -15,7 +15,6 @@ use crate::app::config::OutboundProtocolOption;
 use crate::app::dns::DnsManager;
 use crate::app::Context as AppContext;
 use crate::common::Address;
-use crate::transport::raw::TcpStream;
 use async_trait::async_trait;
 use bytes::BufMut;
 use futures::ready;
@@ -26,10 +25,6 @@ use std::pin::Pin;
 use std::task::{Context, Poll};
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tokio::sync::mpsc;
-
-pub trait AsTcpStream {
-    fn as_tcp_stream(&mut self) -> &mut TcpStream;
-}
 
 pub trait AsAny: 'static {
     fn as_any(&self) -> &dyn std::any::Any;

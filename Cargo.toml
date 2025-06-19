@@ -44,10 +44,12 @@ rustls = { version = "0.23.26", features = ["logging", "ring", "std", "tls12"], 
 rustls-pki-types = "1.11.0"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-shadowsocks = { version = "1.23.0", features = ["aead-cipher-2022", "security-replay-attack-detect"] }
+shadowsocks = { git = "https://github.com/shadowsocks/shadowsocks-rust.git", rev = "12c4ff2593da97c39f83ac907f0c721fb404b6d6", features = ["aead-cipher-2022", "security-replay-attack-detect"] }
 shadowsocks-crypto = { version = "0.6.0", default-features = false }
 tokio = { version = "1", features = ["net", "io-util", "macros", "rt", "signal", "sync"] }
+tokio-tungstenite = "0.27"
 trait-variant = "0.1"
+tungstenite = { version = "0.27", default-features = false }
 uuid = {version = "1.13.1", features = ["v5"]}
 webpki-roots = "0.26.8"
 
@@ -80,7 +82,7 @@ hex = { version = "0.4", optional = true }
 sha2 = { version = "0.10", optional = true }
 
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "^0.48.0", features = ["Win32_System_Console", "Win32_Foundation"] }
+windows-sys = { version = "^0.60", features = ["Win32_System_Console", "Win32_Foundation"] }
 
 [build-dependencies]
 prost-build = "0.13.4"

@@ -5,7 +5,6 @@ use super::VlessFlow;
 use crate::common::{from_str, invalid_data_error, to_string, Address, DEFAULT_BUF_SIZE};
 use crate::impl_asyncwrite_flush_shutdown;
 use crate::proxy::request_command;
-use crate::transport::tls::TlsStream;
 use bytes::{Buf, BufMut, BytesMut};
 use futures::{ready, FutureExt};
 use prost::Message;
@@ -168,15 +167,15 @@ pub(crate) struct VlessStream {
 }
 
 impl VlessStream {
-    pub fn new<S: ProxyStream>(
-        stream: S,
+    pub fn new(
+        stream: Box<dyn ProxyStream>,
         addr: Address,
         id: Uuid,
         flow: VlessFlow,
         stream_id: u32,
     ) -> Self {
         let stream: Box<dyn ProxyStream> = match flow {
-            VlessFlow::None => Box::new(stream),
+            VlessFlow::None => stream,
             _ => Box::new(VisionStream::new(stream, id, stream_id)),
         };
         Self {
@@ -211,9 +210,9 @@ impl AsyncRead for VlessStream {
                             .stream
                             .as_mut()
                             .as_any_mut()
-                            .downcast_mut::<VisionStream<TlsStream>>()
+                            .downcast_mut::<VisionStream>()
                             .expect("vision stream")
-                            .as_raw_stream(),
+                            .as_mut_ref(),
                     };
 
                     ready!(raw_stream.poll_read_exact(cx, buffer))?;
@@ -257,9 +256,7 @@ impl AsyncRead for VlessStream {
                 }
                 VlessStreamReadState::DecodeBody => {
                     log::debug!("{} Reading response body", this.stream_id);
-                    return Pin::new(&mut this.stream)
-                        .poll_read(cx, buf)
-                        .map_err(Into::into);
+                    return Pin::new(&mut this.stream).poll_read(cx, buf);
                 }
             }
         }
@@ -276,25 +273,20 @@ impl AsyncWrite for VlessStream {
             this.addr
         );
 
-        Pin::new(&mut this.stream)
-            .poll_write(cx, buf)
-            .map_err(Into::into)
+        Pin::new(&mut this.stream).poll_write(cx, buf)
     }
 
     impl_asyncwrite_flush_shutdown!(stream);
 }
 
-pub(crate) struct VlessUdpStream<S> {
+pub(crate) struct VlessUdpStream {
     // bool is used to indicate whether to decode header when poll_recv_from
-    stream: Mutex<(S, bool)>,
+    stream: Mutex<(Box<dyn ProxyStream>, bool)>,
     target: Address,
 }
 
-impl<S> VlessUdpStream<S>
-where
-    S: ProxyStream,
-{
-    pub fn new(stream: S, target: Address) -> Self {
+impl VlessUdpStream {
+    pub fn new(stream: Box<dyn ProxyStream>, target: Address) -> Self {
         Self {
             stream: Mutex::new((stream, true)),
             target,
@@ -302,10 +294,7 @@ where
     }
 }
 
-impl<S> ProxySocket for VlessUdpStream<S>
-where
-    S: ProxyStream,
-{
+impl ProxySocket for VlessUdpStream {
     fn poll_recv_from(&self, cx: &mut Context<'_>, buf: &mut ReadBuf<'_>) -> Poll<Result<Address>> {
         let mut stream_fut = Box::pin(self.stream.lock());
         let mut stream = ready!(stream_fut.poll_unpin(cx));
@@ -511,19 +500,13 @@ impl MuxCoolLong {
     }
 }
 
-pub(crate) struct VlessMuxStream<S>
-where
-    S: ProxyStream,
-{
-    stream: Mutex<(VisionStream<S>, bool, bool)>,
+pub(crate) struct VlessMuxStream {
+    stream: Mutex<(VisionStream, bool, bool)>,
     global_id: [u8; 8],
 }
 
-impl<S> VlessMuxStream<S>
-where
-    S: ProxyStream,
-{
-    pub fn new(stream: S, id: Uuid, global_id: [u8; 8], stream_id: u32) -> Self {
+impl VlessMuxStream {
+    pub fn new(stream: Box<dyn ProxyStream>, id: Uuid, global_id: [u8; 8], stream_id: u32) -> Self {
         Self {
             stream: Mutex::new((VisionStream::new(stream, id, stream_id), true, true)),
             global_id,
@@ -531,15 +514,12 @@ where
     }
 }
 
-impl<S> ProxySocket for VlessMuxStream<S>
-where
-    S: ProxyStream,
-{
+impl ProxySocket for VlessMuxStream {
     fn poll_recv_from(&self, cx: &mut Context<'_>, buf: &mut ReadBuf<'_>) -> Poll<Result<Address>> {
         let mut stream_fut = Box::pin(self.stream.lock());
         let mut stream = ready!(stream_fut.poll_unpin(cx));
         let (stream, decode_header, _) = stream.deref_mut();
-        let mut raw_stream = stream.as_raw_stream();
+        let mut raw_stream = stream.as_mut_ref();
         if *decode_header {
             let mut buffer = [0u8; 2];
             ready!(Pin::new(&mut raw_stream).poll_read_exact(cx, &mut buffer))?;

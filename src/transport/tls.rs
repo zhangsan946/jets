@@ -1,7 +1,7 @@
-use super::raw::{ConnectOpts, TcpStream};
+use super::raw::TcpStream;
 use crate::app::config::TlsSettings;
 use crate::common::{invalid_data_error, invalid_input_error, Address};
-use crate::proxy::{AsTcpStream, LocalAddr};
+use crate::proxy::LocalAddr;
 use futures::ready;
 use once_cell::sync::Lazy;
 use rustls::{ClientConfig, ClientConnection, KeyLogFile, RootCertStore};
@@ -69,13 +69,7 @@ impl Tls {
 }
 
 impl Tls {
-    pub async fn connect(
-        &self,
-        addr: &SocketAddr,
-        connect_opts: &ConnectOpts,
-        xtls: bool,
-    ) -> Result<TlsStream> {
-        let conn = TcpStream::connect_with_opts(addr, connect_opts).await?;
+    pub async fn connect(&self, conn: TcpStream, xtls: bool) -> Result<TlsStream> {
         let session = ClientConnection::new(self.tls_config.clone(), self.server_name.clone())
             .map_err(|e| Error::other(format!("Unable to create tls session: {}", e)))?;
         let mut tls_stream = TlsStream::new(conn, session, xtls);
@@ -97,12 +91,6 @@ pub struct TlsStream {
     xtls: bool,
 }
 
-impl AsTcpStream for TlsStream {
-    fn as_tcp_stream(&mut self) -> &mut TcpStream {
-        &mut self.conn
-    }
-}
-
 impl LocalAddr for TlsStream {
     fn local_addr(&self) -> Result<SocketAddr> {
         self.conn.local_addr()
@@ -117,6 +105,10 @@ impl TlsStream {
             read_state: ReadState::ReadHead([0u8; 5], 0),
             xtls,
         }
+    }
+
+    pub fn as_mut_ref(&mut self) -> &mut TcpStream {
+        &mut self.conn
     }
 
     pub fn conn_read(&mut self, cx: &mut Context) -> Poll<Result<usize>> {

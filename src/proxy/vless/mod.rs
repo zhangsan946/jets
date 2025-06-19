@@ -5,12 +5,11 @@ pub mod stream;
 pub mod xtls;
 
 use super::{request_command, Outbound, ProxySocket, ProxyStream};
-use crate::app::config::{OutboundProtocolOption, TlsSettings, VlessFlow};
+use crate::app::config::{OutboundProtocolOption, VlessFlow};
 use crate::app::dns::DnsManager;
 use crate::common::{invalid_data_error, Address};
 use crate::pre_check_addr;
-use crate::transport::raw::ConnectOpts;
-use crate::transport::tls::Tls;
+use crate::transport::TransportSettings;
 use async_trait::async_trait;
 use bytes::BytesMut;
 use once_cell::sync::Lazy;
@@ -43,8 +42,7 @@ pub struct VlessOutbound {
     addr: Address,
     id: Uuid,
     flow: VlessFlow,
-    connect_opts: ConnectOpts,
-    tls: Tls,
+    transport_settings: TransportSettings,
 }
 
 impl VlessOutbound {
@@ -52,16 +50,13 @@ impl VlessOutbound {
         addr: Address,
         id: Uuid,
         flow: VlessFlow,
-        tls_settings: TlsSettings,
-        connect_opts: ConnectOpts,
+        transport_settings: TransportSettings,
     ) -> Result<Self> {
-        let tls = Tls::new(tls_settings, &addr)?;
         Ok(Self {
             addr,
             id,
             flow,
-            connect_opts,
-            tls,
+            transport_settings,
         })
     }
 }
@@ -86,12 +81,8 @@ impl Outbound for VlessOutbound {
     async fn connect_tcp(&self, addr: Address) -> Result<Box<dyn ProxyStream>> {
         let server_addr = pre_check_addr!(self.addr);
         let mut stream = self
-            .tls
-            .connect(
-                server_addr,
-                &self.connect_opts,
-                self.flow != VlessFlow::None,
-            )
+            .transport_settings
+            .connect_tcp(server_addr, self.flow != VlessFlow::None)
             .await?;
 
         let stream_id = std::time::SystemTime::now()
@@ -120,12 +111,8 @@ impl Outbound for VlessOutbound {
         }
         let server_addr = pre_check_addr!(self.addr);
         let mut stream = self
-            .tls
-            .connect(
-                server_addr,
-                &self.connect_opts,
-                false, //?
-            )
+            .transport_settings
+            .connect_tcp(server_addr, self.flow != VlessFlow::None)
             .await?;
 
         // https://github.com/XTLS/Xray-core/discussions/252

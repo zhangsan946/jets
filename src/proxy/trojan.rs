@@ -1,10 +1,9 @@
 use super::{Outbound, ProxySocket, ProxyStream};
-use crate::app::config::{OutboundProtocolOption, TlsSettings};
+use crate::app::config::OutboundProtocolOption;
 use crate::app::dns::DnsManager;
 use crate::common::Address;
 use crate::pre_check_addr;
-use crate::transport::raw::ConnectOpts;
-use crate::transport::tls::Tls;
+use crate::transport::TransportSettings;
 use async_trait::async_trait;
 use bytes::{BufMut, BytesMut};
 use futures::{ready, FutureExt};
@@ -96,25 +95,21 @@ impl<'a> TrojanHandshake<'a> {
 pub struct TrojanOutbound {
     addr: Address,
     password: String,
-    connect_opts: ConnectOpts,
-    tls: Tls,
+    transport_settings: TransportSettings,
 }
 
 impl TrojanOutbound {
     pub fn new(
         addr: Address,
         password: String,
-        tls_settings: TlsSettings,
-        connect_opts: ConnectOpts,
+        transport_settings: TransportSettings,
     ) -> Result<Self> {
-        let tls = Tls::new(tls_settings, &addr)?;
         let password = Sha224::digest(password.as_bytes());
         let password = hex::encode(&password[..]);
         Ok(Self {
             addr,
             password,
-            connect_opts,
-            tls,
+            transport_settings,
         })
     }
 }
@@ -139,8 +134,8 @@ impl Outbound for TrojanOutbound {
     async fn connect_tcp(&self, addr: Address) -> Result<Box<dyn ProxyStream>> {
         let server_addr = pre_check_addr!(self.addr);
         let mut stream = self
-            .tls
-            .connect(server_addr, &self.connect_opts, false)
+            .transport_settings
+            .connect_tcp(server_addr, false)
             .await?;
 
         let handshake = TrojanHandshake::new(&addr, &self.password, request_command::TCP);
@@ -148,14 +143,14 @@ impl Outbound for TrojanOutbound {
         handshake.write_to_buf(&mut buffer);
         stream.write_all(&buffer).await?;
 
-        Ok(Box::new(stream) as Box<dyn ProxyStream>)
+        Ok(stream)
     }
 
     async fn bind(&self, _peer: SocketAddr, target: Address) -> Result<Box<dyn ProxySocket>> {
         let server_addr = pre_check_addr!(self.addr);
         let mut stream = self
-            .tls
-            .connect(server_addr, &self.connect_opts, false)
+            .transport_settings
+            .connect_tcp(server_addr, false)
             .await?;
 
         let handshake = TrojanHandshake::new(&target, &self.password, request_command::UDP);
@@ -167,15 +162,12 @@ impl Outbound for TrojanOutbound {
     }
 }
 
-pub(crate) struct TrojanUdpStream<S> {
-    stream: Mutex<S>,
+struct TrojanUdpStream {
+    stream: Mutex<Box<dyn ProxyStream>>,
 }
 
-impl<S> TrojanUdpStream<S>
-where
-    S: ProxyStream,
-{
-    pub fn new(stream: S) -> Self {
+impl TrojanUdpStream {
+    pub fn new(stream: Box<dyn ProxyStream>) -> Self {
         Self {
             stream: Mutex::new(stream),
         }
@@ -191,10 +183,7 @@ where
 /// +------+----------+----------+--------+---------+----------+
 /// ```
 ///
-impl<S> ProxySocket for TrojanUdpStream<S>
-where
-    S: ProxyStream,
-{
+impl ProxySocket for TrojanUdpStream {
     fn poll_recv_from(&self, cx: &mut Context<'_>, buf: &mut ReadBuf<'_>) -> Poll<Result<Address>> {
         let mut stream_fut = Box::pin(self.stream.lock());
         let mut stream = ready!(stream_fut.poll_unpin(cx));
