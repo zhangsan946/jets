@@ -7,9 +7,9 @@
 A Rust rule-based tunnel targeting to enduser for secure & reliable network access in high speed.
 
 ## Features
-This project still has many features to be implemented. Welcome anyone interested to PR to accelerate.
+This project still has many features to be implemented. Welcome anyone interested in this project to PR to accelerate.
 
-✅ Implemented 🚧 Under construction ❌ Not yet implemented
+✅ Implemented 🚧 Partial Implemented  ❌ Not yet implemented
 
 - Inbound
 	- socks(✅ socks5, ❌ socks4)
@@ -38,20 +38,21 @@ This project still has many features to be implemented. Welcome anyone intereste
 - Transport
 	- ✅ raw/tcp
 	- ✅ tls
+	- ✅ websocket
 	- ❌ reality
-	- ❌ http, websocket, gprc, xhttp, ...
+	- ❌ http, gprc, xhttp, ...
 
 - Other
 	- ✅ Connection option, e.g. bind interface, tcp fast open, ...
 	- ✅ UDP Full Cone
 	- ❌ Connection retry logic
 	- ❌ socks & http authentication
-	- ❌ tls config, e.g. server name, certificate, ...
+	- 🚧 tls config, e.g. server name, certificate, ...
 	- ❌ fakedns
 	- ❌ more protocols & configurations
 
 ## Getting Started
-Create a Jets' configuration file named `config.json`. For detailed explanation of the configuration file could be found on the [Wiki page](https://github.com/zhangsan946/jets/wiki). Then run the following command:
+Create a Jets' configuration file named `config.json`. Detailed explanation of the configuration file could be found on the [Wiki page](https://github.com/zhangsan946/jets/wiki). Then run the following command:
 
 ```bash
 jet -c config.json
