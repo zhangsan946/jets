@@ -324,10 +324,14 @@ async fn build_resolver(
     } else if let Some(tag) = dns_outbound_tag {
         outbounds
             .get(tag)
-            .ok_or_else(|| invalid_input_error(format!("Invalid local outbound tag of {} set for dns", tag)))?
+            .ok_or_else(|| {
+                invalid_input_error(format!("Invalid local outbound tag of {} set for dns", tag))
+            })?
             .clone()
     } else {
-        outbounds.first_freedom().ok_or_else(|| invalid_input_error("Freedom outbound is required for current dns config"))?
+        outbounds.first_freedom().ok_or_else(|| {
+            invalid_input_error("Freedom outbound is required for current dns config")
+        })?
     };
     Ok(Arc::new(create_resolver(
         resolver_config,
