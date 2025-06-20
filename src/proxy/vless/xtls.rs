@@ -269,7 +269,13 @@ impl AsyncRead for VisionStream {
                 }
                 ReadState::Output(ref mut buffer, bytes_left) => {
                     let len = buf.remaining();
-                    if len >= buffer.remaining() {
+                    let content_length = buffer.remaining();
+                    if content_length == 0 {
+                        this.read_state = ReadState::Reading;
+                        return Poll::Pending;
+                    }
+
+                    if len >= content_length {
                         buf.put_slice(buffer);
                         if let Some(bytes_left) = bytes_left {
                             log::debug!(
