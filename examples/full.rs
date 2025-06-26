@@ -22,7 +22,7 @@ fn main() -> std::io::Result<()> {
     // config.log.error = Some("error.log".to_string());
     // config.log.access = Some("access.log".to_string());
 
-    let mut socks_inbound = InboundConfig::new_socks("127.0.0.1", 1080);
+    let mut socks_inbound = InboundConfig::new_socks("127.0.0.1", 1080, "socks-in");
     socks_inbound.settings = jets::app::config::InboundSettings::Socks {
         auth: Default::default(),
         accounts: vec![],
@@ -31,19 +31,27 @@ fn main() -> std::io::Result<()> {
     config.inbounds.push(socks_inbound);
     // config
     //     .inbounds
-    //     .push(InboundConfig::new_http("127.0.0.1", 1090));
+    //     .push(InboundConfig::new_http("127.0.0.1", 1090, "http-in"));
+    config.inbounds.push(InboundConfig::new_tun(
+        "wintun",
+        "198.18.0.2/24",
+        "198.18.0.1",
+        None,
+        "tun",
+    ));
     // config
     //     .inbounds
-    //     .push(InboundConfig::new_tun("wintun", "198.18.0.2/24", "198.18.0.1"));
+    //     .push(InboundConfig::new_dns("127.0.0.1", 5553));
 
     // config
     //     .outbounds
-    //     .push(OutboundConfig::new_socks("127.0.0.1", 18000));
+    //     .push(OutboundConfig::new_socks("127.0.0.1", 18000, "socks-out"));
     // let mut ss_outbound = OutboundConfig::new_shadowsocks(
     //     "ss_server",
     //     1234,
     //     jets::app::config::CipherKind::AEAD2022_BLAKE3_AES_256_GCM,
     //     "ss_pass",
+    //     "ss-out",
     // );
     // ss_outbound.stream_settings.sockopt.interface = Some("WiFi".to_string());
     // config.outbounds.push(ss_outbound);
@@ -51,37 +59,38 @@ fn main() -> std::io::Result<()> {
     //     "trojan_server",
     //     1234,
     //     "trojan_password",
+    //     "trojan-out",
     // ));
     // config.outbounds.push(OutboundConfig::new_vless(
     //     "vless_server",
     //     1234,
     //     "vless_uuid",
     //     jets::app::config::VlessFlow::None,
+    //     "vless-out",
     // ));
     config.outbounds.push(OutboundConfig::new_vless(
         "vless_vision_server",
         1234,
         "vless_uuid",
         jets::app::config::VlessFlow::XtlsRprxVision,
+        "vless-vision-out",
     ));
+    config.outbounds.push(OutboundConfig::new_freedom("direct"));
     config
         .outbounds
-        .push(OutboundConfig::new_freedom(Some("direct".to_string())));
-    config
-        .outbounds
-        .push(OutboundConfig::new_blackhole(Some("block".to_string())));
+        .push(OutboundConfig::new_blackhole("block"));
 
-    let mut routing_rule = RoutingRule::new("direct".to_string());
+    let mut routing_rule = RoutingRule::new("direct");
     routing_rule
         .domain
         .append(&mut ["geosite:cn".to_string()].to_vec());
     config.routing.rules.push(routing_rule);
-    let mut routing_rule = RoutingRule::new("direct".to_string());
+    let mut routing_rule = RoutingRule::new("direct");
     routing_rule
         .ip
         .append(&mut ["geoip:cn".to_string(), "geoip:private".to_string()].to_vec());
     config.routing.rules.push(routing_rule);
-    let mut routing_rule = RoutingRule::new("block".to_string());
+    let mut routing_rule = RoutingRule::new("block");
     routing_rule
         .domain
         .append(&mut ["geosite:category-ads-all".to_string()].to_vec());

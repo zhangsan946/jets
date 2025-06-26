@@ -238,6 +238,7 @@ pub enum InboundProtocolOption {
     Socks,
     Http,
     Tun,
+    Dns,
 }
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq)]
@@ -252,6 +253,12 @@ pub enum SocksAuthOption {
 pub struct Account {
     pub user: String,
     pub pass: String,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct DnsServerConfig {
+    pub address: String,
+    pub port: u16,
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]
@@ -276,6 +283,8 @@ pub enum InboundSettings {
         #[cfg(unix)]
         #[serde(default)]
         fd: Option<i32>,
+        #[serde(default)]
+        intercept_dns: Option<DnsServerConfig>,
     },
     #[default]
     None,
@@ -331,13 +340,17 @@ impl InboundConfig {
         }
     }
 
-    pub fn new_socks<S: Into<String>>(listen: S, port: u16) -> Self {
-        Self::new(listen, port, InboundProtocolOption::Socks)
+    pub fn new_socks<S: Into<String>>(listen: S, port: u16, tag: S) -> Self {
+        let mut inbound = Self::new(listen, port, InboundProtocolOption::Socks);
+        inbound.tag = Some(tag.into());
+        inbound
     }
 
     #[cfg(feature = "inbound-http")]
-    pub fn new_http<S: Into<String>>(listen: S, port: u16) -> Self {
-        Self::new(listen, port, InboundProtocolOption::Http)
+    pub fn new_http<S: Into<String>>(listen: S, port: u16, tag: S) -> Self {
+        let mut inbound = Self::new(listen, port, InboundProtocolOption::Http);
+        inbound.tag = Some(tag.into());
+        inbound
     }
 
     #[cfg(feature = "inbound-tun")]
@@ -346,6 +359,8 @@ impl InboundConfig {
         address: S,
         destination: S,
         #[cfg(unix)] fd: Option<i32>,
+        intercept_dns: Option<S>,
+        tag: S,
     ) -> Self {
         let mut inbound = Self::new("0.0.0.0", 0, InboundProtocolOption::Tun);
         inbound.settings = InboundSettings::Tun {
@@ -354,10 +369,19 @@ impl InboundConfig {
             destination: destination.into(),
             #[cfg(unix)]
             fd,
+            intercept_dns: intercept_dns.map(|s| DnsServerConfig {
+                address: s.into(),
+                port: 53,
+            }),
         };
+        inbound.tag = Some(tag.into());
         inbound.sniffing.enabled = true;
         inbound.sniffing.dest_override = vec![DestOverrideOption::Tls, DestOverrideOption::Http];
         inbound
+    }
+
+    pub fn new_dns<S: Into<String>>(listen: S, port: u16) -> Self {
+        Self::new(listen, port, InboundProtocolOption::Dns)
     }
 }
 
@@ -507,7 +531,7 @@ impl OutboundConfig {
         }
     }
 
-    pub fn new_socks<S: Into<String>>(addr: S, port: u16) -> Self {
+    pub fn new_socks<S: Into<String>>(addr: S, port: u16, tag: S) -> Self {
         let mut outbound = Self::new(OutboundProtocolOption::Socks);
         outbound.settings = OutboundSettings::Socks {
             servers: vec![SocksServer {
@@ -516,6 +540,7 @@ impl OutboundConfig {
                 users: vec![],
             }],
         };
+        outbound.tag = Some(tag.into());
         outbound
     }
 
@@ -523,7 +548,8 @@ impl OutboundConfig {
         addr: S,
         port: u16,
         method: CipherKind,
-        password: &str,
+        password: S,
+        tag: S,
     ) -> Self {
         let mut outbound = Self::new(OutboundProtocolOption::Shadowsocks);
         outbound.settings = OutboundSettings::Shadowsocks {
@@ -531,14 +557,15 @@ impl OutboundConfig {
                 address: addr.into(),
                 port,
                 method,
-                password: password.to_string(),
+                password: password.into(),
             }],
         };
+        outbound.tag = Some(tag.into());
         outbound
     }
 
     #[cfg(feature = "outbound-trojan")]
-    pub fn new_trojan<S: Into<String>>(addr: S, port: u16, password: S) -> Self {
+    pub fn new_trojan<S: Into<String>>(addr: S, port: u16, password: S, tag: S) -> Self {
         let mut outbound = Self::new(OutboundProtocolOption::Trojan);
         outbound.settings = OutboundSettings::Trojan {
             servers: vec![TrojanServer {
@@ -548,10 +575,17 @@ impl OutboundConfig {
             }],
         };
         outbound.stream_settings.security = SecurityOption::Tls;
+        outbound.tag = Some(tag.into());
         outbound
     }
 
-    pub fn new_vless<S: Into<String>>(addr: S, port: u16, id: &str, flow: VlessFlow) -> Self {
+    pub fn new_vless<S: Into<String>>(
+        addr: S,
+        port: u16,
+        id: &str,
+        flow: VlessFlow,
+        tag: S,
+    ) -> Self {
         let mut outbound = Self::new(OutboundProtocolOption::Vless);
         outbound.settings = OutboundSettings::Vless {
             vnext: vec![VlessServer {
@@ -565,18 +599,19 @@ impl OutboundConfig {
             }],
         };
         outbound.stream_settings.security = SecurityOption::Tls;
+        outbound.tag = Some(tag.into());
         outbound
     }
 
-    pub fn new_freedom(tag: Option<String>) -> Self {
+    pub fn new_freedom<S: Into<String>>(tag: S) -> Self {
         let mut outbound = Self::new(OutboundProtocolOption::Freedom);
-        outbound.tag = tag;
+        outbound.tag = Some(tag.into());
         outbound
     }
 
-    pub fn new_blackhole(tag: Option<String>) -> Self {
+    pub fn new_blackhole<S: Into<String>>(tag: S) -> Self {
         let mut outbound = Self::new(OutboundProtocolOption::Blackhole);
-        outbound.tag = tag;
+        outbound.tag = Some(tag.into());
         outbound
     }
 }
@@ -603,13 +638,13 @@ pub struct RoutingRule {
 }
 
 impl RoutingRule {
-    pub fn new(outbound_tag: String) -> Self {
+    pub fn new<S: Into<String>>(outbound_tag: S) -> Self {
         Self {
             r#type: "field".to_string(),
             domain: vec![],
             ip: vec![],
             inbound_tag: vec![],
-            outbound_tag,
+            outbound_tag: outbound_tag.into(),
         }
     }
 }

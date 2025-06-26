@@ -16,6 +16,7 @@ use crate::proxy::{Outbound, ProxySocket, ProxyStream};
 pub use config::Config;
 use dns::DnsManager;
 use futures::{future, FutureExt};
+use hickory_resolver::proto::op::Message;
 use proxy::{Inbounds, Outbounds};
 use router::Router;
 use std::collections::VecDeque;
@@ -215,6 +216,11 @@ impl Context {
     #[inline]
     pub async fn resolve(&self, address: &Address) -> Result<SocketAddr> {
         self.dns.resolve(address).await
+    }
+
+    #[inline]
+    pub async fn query(&self, peer_addr: SocketAddr, request: &Message) -> Result<Message> {
+        self.dns.query(peer_addr, request).await
     }
 }
 

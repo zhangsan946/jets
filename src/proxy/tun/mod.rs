@@ -49,6 +49,7 @@ pub struct TunInbound {
     tun_config: TunConfiguration,
     address: IpNet,
     sniffer: Sniffer,
+    intercept_dns: Option<SocketAddr>,
 }
 
 /// TunConfiguration contains a HANDLE, which is a *mut c_void on Windows.
@@ -60,6 +61,7 @@ impl TunInbound {
         address: String,
         destination: String,
         #[cfg(unix)] fd: Option<RawFd>,
+        intercept_dns: Option<SocketAddr>,
         accept_opts: AcceptOpts,
         sniffer: Sniffer,
     ) -> Result<Self> {
@@ -97,6 +99,7 @@ impl TunInbound {
             address,
             tun_config,
             sniffer,
+            intercept_dns,
         })
     }
 }
@@ -113,6 +116,11 @@ impl Inbound for TunInbound {
             Err(TunError::Io(err)) => return Err(err),
             Err(err) => return Err(Error::other(err)),
         };
+        log::info!(
+            "Creating tun interface with ip {}/{}",
+            self.address.addr(),
+            self.address.prefix_len()
+        );
         if let Some(channel) = channel {
             let _ = channel.send("tun".to_string()).await;
         }
@@ -124,7 +132,8 @@ impl Inbound for TunInbound {
             device.mtu().unwrap_or(1500) as u32,
         );
 
-        let (udp, udp_cleanup_interval, udp_keepalive_rx) = UdpTun::new(context);
+        let (udp, udp_cleanup_interval, udp_keepalive_rx) =
+            UdpTun::new(context, self.intercept_dns);
 
         let handler = TunHandler {
             device,
