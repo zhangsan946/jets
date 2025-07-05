@@ -44,7 +44,7 @@ rustls = { version = "0.23.26", features = ["logging", "ring", "std", "tls12"], 
 rustls-pki-types = "1.11.0"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-shadowsocks = { git = "https://github.com/shadowsocks/shadowsocks-rust.git", rev = "12c4ff2593da97c39f83ac907f0c721fb404b6d6", features = ["aead-cipher-2022", "security-replay-attack-detect"] }
+shadowsocks = { version = "1.23.2", features = ["aead-cipher-2022", "security-replay-attack-detect"] }
 shadowsocks-crypto = { version = "0.6.0", default-features = false }
 tokio = { version = "1", features = ["net", "io-util", "macros", "rt", "signal", "sync"] }
 tokio-tungstenite = "0.27"

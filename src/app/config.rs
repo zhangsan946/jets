@@ -1,8 +1,6 @@
 use crate::common::log::JETS_ACCESS_LIST;
 use crate::common::{invalid_input_error, TCP_DEFAULT_KEEPALIVE_TIMEOUT};
 use crate::impl_display;
-#[cfg(target_os = "android")]
-use crate::transport::raw::SocketProtect;
 use crate::transport::raw::{AcceptOpts, ConnectOpts, TcpSocketOpts, UdpSocketOpts};
 use serde::de::{Deserializer, Error};
 use serde::{Deserialize, Serialize};
@@ -103,6 +101,23 @@ impl Default for WsSettings {
     }
 }
 
+#[cfg(target_os = "android")]
+mod android {
+    use std::fmt;
+
+    type SocketProtect = Box<dyn Fn(std::os::fd::RawFd) -> std::io::Result<()> + Send + Sync>;
+
+    pub struct SocketProtectFn {
+        pub f: SocketProtect,
+    }
+
+    impl fmt::Debug for SocketProtectFn {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            f.debug_struct("SocketProtect").finish_non_exhaustive()
+        }
+    }
+}
+
 #[derive(Clone, Debug, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct SocketOption {
@@ -120,7 +135,7 @@ pub struct SocketOption {
     pub v6_only: bool,
     #[cfg(target_os = "android")]
     #[serde(skip_deserializing)]
-    pub vpn_socket_protect: Option<std::sync::Arc<Box<dyn SocketProtect + Send + Sync>>>,
+    pub vpn_socket_protect: Option<std::sync::Arc<android::SocketProtectFn>>,
 }
 
 impl Default for SocketOption {
@@ -143,6 +158,18 @@ impl Default for SocketOption {
             #[cfg(target_os = "android")]
             vpn_socket_protect: None,
         }
+    }
+}
+
+#[cfg(target_os = "android")]
+impl SocketOption {
+    pub fn set_vpn_socket_protect<F>(&mut self, f: F)
+    where
+        F: Fn(std::os::fd::RawFd) -> std::io::Result<()> + Send + Sync + 'static,
+    {
+        self.vpn_socket_protect = Some(std::sync::Arc::new(android::SocketProtectFn {
+            f: Box::new(f),
+        }));
     }
 }
 
@@ -193,7 +220,8 @@ impl TryFrom<SocketOption> for ConnectOpts {
             } else {
                 None
             };
-        Ok(ConnectOpts {
+        #[allow(unused_mut)]
+        let mut opts = ConnectOpts {
             #[cfg(any(target_os = "linux", target_os = "android"))]
             fwmark: value.mark,
             bind_local_addr,
@@ -205,8 +233,15 @@ impl TryFrom<SocketOption> for ConnectOpts {
             #[cfg(target_os = "android")]
             vpn_protect_path: None,
             #[cfg(target_os = "android")]
-            vpn_socket_protect: value.vpn_socket_protect,
-        })
+            vpn_socket_protect: None,
+        };
+        #[cfg(target_os = "android")]
+        if let Some(protect_fn) = value.vpn_socket_protect {
+            use std::sync::Arc;
+            let protect_fn = Arc::into_inner(protect_fn).unwrap();
+            opts.set_vpn_socket_protect(protect_fn.f);
+        }
+        Ok(opts)
     }
 }
 

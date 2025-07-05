@@ -2251,6 +2251,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "94143f37725109f92c262ed2cf5e59bce7498c01bcc1502d7b9afe439a4e9f49"
 
 [[package]]
+name = "sealed"
+version = "0.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "22f968c5ea23d555e670b449c1c5e7b2fc399fdaec1d304a17cd48e288abc107"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.103",
+]
+
+[[package]]
 name = "sec1"
 version = "0.7.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2353,8 +2364,9 @@ dependencies = [
 
 [[package]]
 name = "shadowsocks"
-version = "1.23.1"
-source = "git+https://github.com/shadowsocks/shadowsocks-rust.git?rev=12c4ff2593da97c39f83ac907f0c721fb404b6d6#12c4ff2593da97c39f83ac907f0c721fb404b6d6"
+version = "1.23.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6f9c9f02f3cd6e85648736cd5915fa8c67cadd48527e7ed5cdd917809297f43c"
 dependencies = [
  "aes",
  "arc-swap",
@@ -2374,6 +2386,7 @@ dependencies = [
  "percent-encoding",
  "pin-project",
  "rand",
+ "sealed",
  "sendfd",
  "serde",
  "serde_json",
