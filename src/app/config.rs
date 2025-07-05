@@ -488,7 +488,6 @@ pub struct ShadowsocksServer {
     #[serde(deserialize_with = "deserialize_method_from_str")]
     pub method: CipherKind,
     pub password: String,
-    pub uot: bool,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -568,7 +567,6 @@ impl OutboundConfig {
                 port,
                 method,
                 password: password.to_string(),
-                uot: false,
             }],
         };
         outbound
