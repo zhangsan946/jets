@@ -1,28 +1,47 @@
+use super::super::dns::resolve;
 use super::super::net_manager::{NatManager, UdpInboundWrite};
 use crate::app::Context;
-use crate::common::Address;
+use crate::common::{invalid_data_error, Address};
 use bytes::{BufMut, BytesMut};
 use etherparse::PacketBuilder;
+use hickory_resolver::proto::op::Message;
 use log::debug;
 use std::{
-    io::{self, ErrorKind},
+    io::{self, Error, ErrorKind},
     net::{IpAddr, Ipv6Addr, SocketAddr},
     time::Duration,
 };
 use tokio::sync::mpsc;
 
 pub struct UdpTun {
+    context: Context,
+    intercept_dns: Option<SocketAddr>,
     tun_rx: mpsc::Receiver<BytesMut>,
     manager: NatManager<UdpTunInboundWriter>,
+    response_writer: UdpTunInboundWriter,
 }
 
 impl UdpTun {
-    pub fn new(context: Context) -> (UdpTun, Duration, mpsc::Receiver<SocketAddr>) {
+    pub fn new(
+        context: Context,
+        intercept_dns: Option<SocketAddr>,
+    ) -> (UdpTun, Duration, mpsc::Receiver<SocketAddr>) {
         let (tun_tx, tun_rx) = mpsc::channel(64);
+        let response_writer = UdpTunInboundWriter::new(tun_tx);
         let (manager, cleanup_interval, keepalive_rx) =
-            NatManager::new(UdpTunInboundWriter::new(tun_tx), context);
+            NatManager::new(response_writer.clone(), context.clone());
 
-        (UdpTun { tun_rx, manager }, cleanup_interval, keepalive_rx)
+        (
+            UdpTun {
+                context,
+                intercept_dns,
+                tun_rx,
+                manager,
+                response_writer,
+            },
+            cleanup_interval,
+            keepalive_rx,
+        )
     }
 
     pub async fn handle_packet(
@@ -37,6 +56,30 @@ impl UdpTun {
             dst_addr,
             payload.len()
         );
+        if let Some(dns_server) = self.intercept_dns {
+            if dst_addr == dns_server {
+                let message = match Message::from_vec(payload) {
+                    Ok(m) => m,
+                    Err(err) => {
+                        return Err(invalid_data_error(format!(
+                            "tun dns udp {} query message parse error: {}",
+                            src_addr, err
+                        )));
+                    }
+                };
+                let context = self.context.clone();
+                let response_writer = self.response_writer.clone();
+                tokio::spawn(async move {
+                    let response = resolve(message, src_addr, context).await;
+                    let buf = response.to_vec()?;
+                    response_writer
+                        .send_to(src_addr, &Address::SocketAddress(dst_addr), &buf)
+                        .await?;
+                    Ok::<(), Error>(())
+                });
+                return Ok(());
+            }
+        }
         if let Err(err) = self
             .manager
             .send_to(src_addr, dst_addr.into(), payload)

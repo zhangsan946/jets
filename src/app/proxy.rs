@@ -11,6 +11,7 @@ use crate::proxy::http::HttpInbound;
 use crate::proxy::trojan::TrojanOutbound;
 use crate::proxy::{
     blackhole::BlackholeOutbound,
+    dns::DnsInbound,
     freedom::FreedomOutbound,
     shadowsocks::ShadowsocksOutbound,
     socks::{Socks5Outbound, SocksInbound},
@@ -172,15 +173,23 @@ fn parse_inbound(inbound: InboundConfig) -> Result<Box<dyn Inbound>> {
                 destination,
                 #[cfg(unix)]
                 fd,
+                intercept_dns,
             } = inbound.settings
             {
                 let sniffer = Sniffer::from(inbound.sniffing);
+                let intercept_dns = if let Some(config) = intercept_dns {
+                    let addr = format!("{}:{}", config.address, config.port);
+                    Some(SocketAddr::from_str(&addr).map_err(|_| invalid_input_error(addr))?)
+                } else {
+                    None
+                };
                 let tun_inbound = TunInbound::new(
                     name,
                     address,
                     destination,
                     #[cfg(unix)]
                     fd,
+                    intercept_dns,
                     accept_opts,
                     sniffer,
                 )?;
@@ -194,6 +203,12 @@ fn parse_inbound(inbound: InboundConfig) -> Result<Box<dyn Inbound>> {
             ErrorKind::Unsupported,
             "Found tun inbound but inbound-tun is not enabled",
         )),
+        InboundProtocolOption::Dns => {
+            let addr = format!("{}:{}", inbound.listen, inbound.port);
+            let addr = SocketAddr::from_str(&addr).map_err(|_| invalid_input_error(addr))?;
+            let dns_inbound = DnsInbound::new(addr, accept_opts);
+            Ok(Box::new(dns_inbound) as Box<dyn Inbound>)
+        }
     }
 }
 

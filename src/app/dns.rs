@@ -3,23 +3,27 @@ use super::dat::GeoSiteList;
 use super::env_vars::RESOURCES_DIR;
 use super::router::{Domain, MatchType, Router};
 use crate::app::proxy::Outbounds;
-use crate::common::{far_future_instant, invalid_input_error, Address};
+use crate::common::{
+    far_future_instant, invalid_data_error, invalid_input_error, Address, MAXIMUM_UDP_PAYLOAD_SIZE,
+};
 use crate::proxy::{Outbound, ProxySocket, ProxyStream};
 use futures::ready;
 use hickory_resolver::config::{
     LookupIpStrategy, NameServerConfig, NameServerConfigGroup, ResolverConfig, ResolverOpts,
 };
 use hickory_resolver::name_server::GenericConnector;
+use hickory_resolver::proto::op::Message as DnsMessage;
 use hickory_resolver::proto::runtime::iocompat::AsyncIoTokioAsStd;
 use hickory_resolver::proto::runtime::{RuntimeProvider, TokioHandle, TokioTime};
 use hickory_resolver::proto::xfer::Protocol;
 use hickory_resolver::system_conf::read_system_conf;
+use hickory_resolver::IntoName;
 use hickory_resolver::Resolver;
 use prost::Message;
 use regex::Regex;
 use std::cell::LazyCell;
 use std::collections::HashMap;
-use std::future::Future;
+use std::future::{poll_fn, Future};
 use std::io::{Error, ErrorKind, Result};
 use std::net::{IpAddr, SocketAddr};
 use std::path::PathBuf;
@@ -35,8 +39,15 @@ pub struct DnsManager {
     cache: RwLock<HashMap<String, (Instant, IpAddr)>>,
     hosts: Vec<(Domain, Vec<IpAddr>)>,
     // Try to use these resolvers if domain matches
-    servers_pior: Vec<(Domain, Arc<DnsResolver>)>,
-    servers: Vec<Arc<DnsResolver>>,
+    servers_pior: Vec<(Domain, DnsServer)>,
+    servers: Vec<DnsServer>,
+}
+
+#[derive(Clone)]
+struct DnsServer {
+    pub resolver: Arc<DnsResolver>,
+    pub outbound: Arc<Box<dyn Outbound>>,
+    pub addr: SocketAddr,
 }
 
 impl DnsManager {
@@ -62,8 +73,8 @@ impl DnsManager {
             }
         }
 
-        let mut servers_pior: Vec<(Domain, Arc<DnsResolver>)> = Vec::new();
-        let mut servers: Vec<Arc<DnsResolver>> = Vec::new();
+        let mut servers_pior = Vec::new();
+        let mut servers = Vec::new();
 
         if config.servers.is_empty() {
             if let Ok((sys_config, sys_opts)) = read_system_conf() {
@@ -219,41 +230,38 @@ impl DnsManager {
             if v.0 < Instant::now() {
                 self.cache.write().await.remove(domain);
             } else {
-                let v = SocketAddr::new(v.1, *port);
-                log::debug!("Hit dns cache {:?} for addr: {}:{}", v, domain, port);
-                return Ok(v);
+                log::debug!("Hit dns cache {} for domain {}", v.1, domain);
+                let addr = SocketAddr::new(v.1, *port);
+                return Ok(addr);
             }
         }
         for host in self.hosts.iter() {
             if host.0.matches(domain, None) {
                 let ip = pick_up_ip(host.1.clone())?;
-                let addr = SocketAddr::new(ip, *port);
-                log::debug!(
-                    "Found static dns record {:?} for addr: {}:{}",
-                    addr,
-                    domain,
-                    port
-                );
+                log::debug!("Found static dns record {} for domain {}", ip, domain,);
                 self.cache
                     .write()
                     .await
                     .insert(domain.clone(), (far_future_instant(), ip));
+                let addr = SocketAddr::new(ip, *port);
                 return Ok(addr);
             }
         }
         for server in self.servers_pior.iter() {
             if server.0.matches(domain, None) {
-                match server.1.lookup_ip(domain).await {
+                let name = format!("{}.", domain);
+                let name = name.into_name()?;
+                match server.1.resolver.lookup_ip(name).await {
                     Ok(result) => {
                         let validity: Instant = result.valid_until();
                         let ips: Vec<IpAddr> = result.into_iter().collect();
                         let ip = pick_up_ip(ips)?;
-                        let addr = SocketAddr::new(ip, *port);
-                        log::debug!("Got dns record {:?} for addr: {}:{}", addr, domain, port);
+                        log::debug!("Got dns record {} for domain {}", ip, domain);
                         self.cache
                             .write()
                             .await
                             .insert(domain.clone(), (validity, ip));
+                        let addr = SocketAddr::new(ip, *port);
                         return Ok(addr);
                     }
                     Err(e) => {
@@ -263,17 +271,19 @@ impl DnsManager {
             }
         }
         for server in self.servers.iter() {
-            match server.lookup_ip(domain).await {
+            let name = format!("{}.", domain);
+            let name = name.into_name()?;
+            match server.resolver.lookup_ip(name).await {
                 Ok(result) => {
                     let validity: Instant = result.valid_until();
                     let ips: Vec<IpAddr> = result.into_iter().collect();
                     let ip = pick_up_ip(ips)?;
-                    let addr = SocketAddr::new(ip, *port);
-                    log::debug!("Got dns record {:?} for addr: {}:{}", addr, domain, port);
+                    log::debug!("Got dns record {} for domain {}", ip, domain);
                     self.cache
                         .write()
                         .await
                         .insert(domain.clone(), (validity, ip));
+                    let addr = SocketAddr::new(ip, *port);
                     return Ok(addr);
                 }
                 Err(e) => {
@@ -286,6 +296,49 @@ impl DnsManager {
             ErrorKind::NotFound,
             format!("Unable to resolve ip for addr: {}:{}", domain, port),
         ))
+    }
+
+    pub async fn query(&self, peer_addr: SocketAddr, request: &DnsMessage) -> Result<DnsMessage> {
+        let query = &request.queries()[0];
+        let domain = query.name().to_string().trim_end_matches('.').to_string();
+        for server in self.servers_pior.iter() {
+            if server.0.matches(&domain, None) {
+                match query_message(
+                    &server.1.outbound,
+                    peer_addr,
+                    server.1.addr,
+                    request.clone(),
+                )
+                .await
+                {
+                    Ok(message) => {
+                        return Ok(message);
+                    }
+                    Err(e) => {
+                        log::warn!(
+                            "Failed to query dns message for {}, error: {}",
+                            peer_addr,
+                            e
+                        )
+                    }
+                }
+            }
+        }
+        for server in self.servers.iter() {
+            match query_message(&server.outbound, peer_addr, server.addr, request.clone()).await {
+                Ok(message) => {
+                    return Ok(message);
+                }
+                Err(e) => {
+                    log::warn!(
+                        "Failed to query dns message for {}, error: {}",
+                        peer_addr,
+                        e
+                    )
+                }
+            }
+        }
+        Err(invalid_data_error("Failed to query dns message"))
     }
 }
 
@@ -306,6 +359,22 @@ fn pick_up_ip(ips: Vec<IpAddr>) -> Result<IpAddr> {
     }
 }
 
+async fn query_message(
+    outbound: &Arc<Box<dyn Outbound>>,
+    peer_addr: SocketAddr,
+    target_addr: SocketAddr,
+    request: DnsMessage,
+) -> Result<DnsMessage> {
+    let socket = outbound
+        .bind(peer_addr, Address::SocketAddress(target_addr))
+        .await?;
+    poll_fn(|cx| socket.poll_send_to(cx, &request.to_vec()?, target_addr)).await?;
+    let mut buf = [0u8; MAXIMUM_UDP_PAYLOAD_SIZE];
+    let (n, _) = poll_fn(|cx| socket.poll_recv_from(cx, &mut buf)).await?;
+    let message = DnsMessage::from_vec(&buf[..n])?;
+    Ok(message)
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn build_resolver(
     routable: bool,
@@ -316,7 +385,7 @@ async fn build_resolver(
     router: &Router,
     resolver_config: ResolverConfig,
     resolver_opts: ResolverOpts,
-) -> Result<Arc<Resolver<GenericConnector<DnsRuntimeProvider>>>> {
+) -> Result<DnsServer> {
     let outbound = if routable {
         let addr = Address::SocketAddress(dns_server_addr);
         let tag = router.pick_as_is(&addr, dns_tag).await;
@@ -333,11 +402,17 @@ async fn build_resolver(
             invalid_input_error("Freedom outbound is required for current dns config")
         })?
     };
-    Ok(Arc::new(create_resolver(
-        resolver_config,
-        resolver_opts,
+    let name_server = resolver_config.name_servers().first().unwrap();
+    let target_addr = name_server.socket_addr;
+    Ok(DnsServer {
+        resolver: Arc::new(create_resolver(
+            resolver_config,
+            resolver_opts,
+            outbound.clone(),
+        )),
         outbound,
-    )))
+        addr: target_addr,
+    })
 }
 
 impl From<QueryStrategy> for LookupIpStrategy {

@@ -1,4 +1,5 @@
 pub mod blackhole;
+pub mod dns;
 pub mod freedom;
 #[cfg(feature = "inbound-http")]
 pub mod http;
