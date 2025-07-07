@@ -32,13 +32,14 @@ fn main() -> std::io::Result<()> {
     // config
     //     .inbounds
     //     .push(InboundConfig::new_http("127.0.0.1", 1090, "http-in"));
-    config.inbounds.push(InboundConfig::new_tun(
-        "wintun",
-        "198.18.0.2/24",
-        "198.18.0.1",
-        None,
-        "tun",
-    ));
+    // config.inbounds.push(InboundConfig::new_tun(
+    //     "wintun",
+    //     "198.18.0.2/24",
+    //     "198.18.0.1",
+    //     None,
+    //     None,
+    //     "tun",
+    // ));
     // config
     //     .inbounds
     //     .push(InboundConfig::new_dns("127.0.0.1", 5553));

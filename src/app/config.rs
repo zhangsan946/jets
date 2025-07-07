@@ -105,13 +105,11 @@ impl Default for WsSettings {
 mod android {
     use std::fmt;
 
-    type SocketProtect = Box<dyn Fn(std::os::fd::RawFd) -> std::io::Result<()> + Send + Sync>;
-
-    pub struct SocketProtectFn {
-        pub f: SocketProtect,
+    pub struct SocketProtect {
+        pub f: Box<dyn Fn(std::os::fd::RawFd) -> std::io::Result<()> + Send + Sync>,
     }
 
-    impl fmt::Debug for SocketProtectFn {
+    impl fmt::Debug for SocketProtect {
         fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
             f.debug_struct("SocketProtect").finish_non_exhaustive()
         }
@@ -135,7 +133,7 @@ pub struct SocketOption {
     pub v6_only: bool,
     #[cfg(target_os = "android")]
     #[serde(skip_deserializing)]
-    pub vpn_socket_protect: Option<std::sync::Arc<android::SocketProtectFn>>,
+    pub vpn_socket_protect: Option<std::sync::Arc<android::SocketProtect>>,
 }
 
 impl Default for SocketOption {
@@ -167,7 +165,7 @@ impl SocketOption {
     where
         F: Fn(std::os::fd::RawFd) -> std::io::Result<()> + Send + Sync + 'static,
     {
-        self.vpn_socket_protect = Some(std::sync::Arc::new(android::SocketProtectFn {
+        self.vpn_socket_protect = Some(std::sync::Arc::new(android::SocketProtect {
             f: Box::new(f),
         }));
     }
@@ -236,10 +234,9 @@ impl TryFrom<SocketOption> for ConnectOpts {
             vpn_socket_protect: None,
         };
         #[cfg(target_os = "android")]
-        if let Some(protect_fn) = value.vpn_socket_protect {
-            use std::sync::Arc;
-            let protect_fn = Arc::into_inner(protect_fn).unwrap();
-            opts.set_vpn_socket_protect(protect_fn.f);
+        if let Some(socket_protect) = value.vpn_socket_protect {
+            let socket_protect = std::sync::Arc::into_inner(socket_protect).unwrap();
+            opts.set_vpn_socket_protect(socket_protect.f);
         }
         Ok(opts)
     }
