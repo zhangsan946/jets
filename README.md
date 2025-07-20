@@ -85,7 +85,7 @@ the same directory as `jets.exe` and run as administrator.
 	```
 
 ## Limitation
-1. Shadowsocks using 2022 cipher only support **32 bytes length** password
+1. Shadowsocks with 2022 cipher only accepts **32 bytes length** password.
 2. On Android, it cannot get system dns config which means config of `localhost` in dns servers won't work. May refer to https://github.com/hickory-dns/hickory-dns/issues/652#issuecomment-1783178552 for possbile workaround.
 
 ## Credits
