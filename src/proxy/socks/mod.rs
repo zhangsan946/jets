@@ -1,3 +1,4 @@
+pub mod socks4;
 pub mod socks5;
 
 use super::http::handle_tcp as http_handle_tcp;
@@ -8,6 +9,7 @@ use crate::common::invalid_data_error;
 use crate::transport::raw::{AcceptOpts, TcpListener, UdpSocket};
 use async_trait::async_trait;
 use futures::{future, FutureExt};
+use socks4::Socks4aInbound;
 use socks5::Socks5Inbound;
 pub use socks5::Socks5Outbound;
 use std::collections::HashMap;
@@ -75,7 +77,8 @@ impl Inbound for SocksInbound {
                 let accounts = self.accounts.clone();
                 let udp_enabled = self.udp_enabled;
                 tokio::spawn(async move {
-                    match handle_tcp(stream, context, addr, accounts, udp_enabled).await {
+                    match handle_tcp(stream, context, addr, peer_addr, accounts, udp_enabled).await
+                    {
                         Ok(_) => Ok(()),
                         Err(e) if e.kind() == ErrorKind::WouldBlock => {
                             log::info!("{} to inbound {} blocked: {:#}", peer_addr, addr, e);
@@ -119,6 +122,7 @@ pub async fn handle_tcp(
     stream: TcpStream,
     context: Context,
     addr: SocketAddr,
+    peer_addr: SocketAddr,
     accounts: HashMap<String, String>,
     udp_enabled: bool,
 ) -> Result<()> {
@@ -130,11 +134,16 @@ pub async fn handle_tcp(
 
     match version_buffer[0] {
         0x04 => {
-            todo!("socks4 inbound");
+            if !accounts.is_empty() {
+                Err(Error::other("SOCKS4 dose not support authentication"))
+            } else {
+                let socks4a_inbound = Socks4aInbound;
+                socks4a_inbound.handle_tcp(stream, peer_addr, context).await
+            }
         }
         0x05 => {
             let socks5_inbound = Socks5Inbound::new(addr, accounts, udp_enabled);
-            socks5_inbound.handle_tcp(stream, context).await
+            socks5_inbound.handle_tcp(stream, peer_addr, context).await
         }
         b'G' | b'g' | b'H' | b'h' | b'P' | b'p' | b'D' | b'd' | b'C' | b'c' | b'O' | b'o'
         | b'T' | b't' => http_handle_tcp(stream, context, &accounts).await,

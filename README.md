@@ -12,7 +12,7 @@ This project still has many features to be implemented. Welcome anyone intereste
 ✅ Implemented 🚧 Partial Implemented  ❌ Not yet implemented
 
 - Inbound
-	- socks(✅ socks5, ❌ socks4)
+	- socks(✅ socks5, ✅ socks4a)
 	- ✅ http
 	- ✅ tun
 

@@ -20,7 +20,7 @@ use shadowsocks::relay::socks5::{
 };
 use std::collections::HashMap;
 use std::io::{Cursor, Read, Result};
-use std::net::{IpAddr, Ipv6Addr, SocketAddr};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::sync::Arc;
 use std::task::{Context, Poll};
 use tokio::io::{AsyncReadExt, ReadBuf};
@@ -42,9 +42,7 @@ impl Socks5Inbound {
             udp_enabled,
         }
     }
-}
 
-impl Socks5Inbound {
     fn auth(&self, user: &String, pass: &String) -> bool {
         if self.accounts.is_empty() {
             true
@@ -56,7 +54,12 @@ impl Socks5Inbound {
         }
     }
 
-    pub async fn handle_tcp(&self, mut stream: TokioTcpStream, context: AppContext) -> Result<()> {
+    pub async fn handle_tcp(
+        &self,
+        mut stream: TokioTcpStream,
+        peer_addr: SocketAddr,
+        context: AppContext,
+    ) -> Result<()> {
         // 1. Handshake
         let request = match HandshakeRequest::read_from(&mut stream).await {
             Ok(r) => r,
@@ -130,7 +133,6 @@ impl Socks5Inbound {
         }
 
         // 2. Fetch headers
-        let peer_addr = stream.peer_addr()?;
         let request = match TcpRequestHeader::read_from(&mut stream).await {
             Ok(h) => h,
             Err(err) => {
@@ -145,10 +147,25 @@ impl Socks5Inbound {
         // 3. Handle Command
         match request.command {
             Command::TcpConnect => {
-                let mut down_stream = connect_tcp_host(&peer_addr, address, context).await?;
-                let addr = Address::SocketAddress(down_stream.local_addr()?);
-                let response = TcpResponseHeader::new(Reply::Succeeded, addr);
-                response.write_to(&mut stream).await?;
+                let mut down_stream = match connect_tcp_host(&peer_addr, address, context).await {
+                    Ok(s) => {
+                        let response = TcpResponseHeader::new(
+                            Reply::Succeeded,
+                            Address::SocketAddress(s.local_addr()?),
+                        );
+                        response.write_to(&mut stream).await?;
+                        s
+                    }
+                    Err(e) => {
+                        let dummy_address = SocketAddr::new(Ipv4Addr::UNSPECIFIED.into(), 0);
+                        let response = TcpResponseHeader::new(
+                            Reply::NetworkUnreachable,
+                            Address::SocketAddress(dummy_address),
+                        );
+                        response.write_to(&mut stream).await?;
+                        return Err(e);
+                    }
+                };
                 let mut stream = Box::new(stream);
                 copy_bidirectional(&mut stream, &mut down_stream)
                     .await

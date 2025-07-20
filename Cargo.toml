@@ -46,6 +46,7 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 shadowsocks = { version = "1.23.2", features = ["aead-cipher-2022", "security-replay-attack-detect"] }
 shadowsocks-crypto = { version = "0.6.0", default-features = false }
+shadowsocks-service = { version = "1.23.5", default-features = false, features = ["local-socks4"] }
 tokio = { version = "1", features = ["net", "io-util", "macros", "rt", "signal", "sync"] }
 tokio-tungstenite = "0.27"
 trait-variant = "0.1"
