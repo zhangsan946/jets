@@ -1,6 +1,6 @@
 use super::config::{
     InboundConfig, InboundProtocolOption, InboundSettings, OutboundConfig, OutboundProtocolOption,
-    OutboundSettings,
+    OutboundSettings, SocksAuthOption,
 };
 use super::router::DEFAULT_OUTBOUND_TAG;
 use super::sniff::Sniffer;
@@ -153,12 +153,16 @@ fn parse_inbound(inbound: InboundConfig) -> Result<Box<dyn Inbound>> {
             let addr = format!("{}:{}", inbound.listen, inbound.port);
             let addr = SocketAddr::from_str(&addr).map_err(|_| invalid_input_error(addr))?;
             let (accounts, udp_enabled) = if let InboundSettings::Socks {
-                auth: _,
+                auth,
                 accounts,
                 udp,
             } = inbound.settings
             {
-                (accounts, udp)
+                if auth == SocksAuthOption::NoAuth {
+                    (Vec::new(), udp)
+                } else {
+                    (accounts, udp)
+                }
             } else {
                 (Vec::new(), false)
             };

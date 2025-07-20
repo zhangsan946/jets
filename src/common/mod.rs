@@ -60,7 +60,6 @@ where
     A: AsyncRead + AsyncWrite + Unpin + ?Sized,
     B: AsyncRead + AsyncWrite + Unpin + ?Sized,
 {
-    // TODO: to align with multibuffer
     let size: usize = DEFAULT_BUF_SIZE;
     copy_bidirectional_with_sizes(a, b, size, size).await
 }

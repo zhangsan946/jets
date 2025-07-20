@@ -19,6 +19,7 @@ pub static ROOT_CERT_STORE: Lazy<Arc<RootCertStore>> = Lazy::new(|| {
     let mut store = RootCertStore::empty();
     store.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
 
+    // TODO: enable native certs loading
     // let CertificateResult { certs, errors, .. } =
     //     rustls_native_certs::load_native_certs();
     // if !errors.is_empty() {
@@ -44,6 +45,8 @@ pub struct Tls {
 
 impl Tls {
     pub fn new(tls_settings: TlsSettings, addr: &Address) -> Result<Self> {
+        // TODO: Support allow insecure
+        // https://gist.github.com/doroved/2c92ddd5e33f257f901c763b728d1b61
         let mut tls_config = ClientConfig::builder()
             .with_root_certificates(ROOT_CERT_STORE.clone())
             .with_no_client_auth();

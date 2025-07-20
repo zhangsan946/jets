@@ -45,6 +45,17 @@ impl Socks5Inbound {
 }
 
 impl Socks5Inbound {
+    fn auth(&self, user: &String, pass: &String) -> bool {
+        if self.accounts.is_empty() {
+            true
+        } else {
+            if let Some(stored_pass) = self.accounts.get(user) {
+                return stored_pass == pass;
+            }
+            false
+        }
+    }
+
     pub async fn handle_tcp(&self, mut stream: TokioTcpStream, context: AppContext) -> Result<()> {
         // 1. Handshake
         let request = match HandshakeRequest::read_from(&mut stream).await {
@@ -65,18 +76,48 @@ impl Socks5Inbound {
             Some(&socks5::SOCKS5_AUTH_METHOD_PASSWORD) => {
                 let response = HandshakeResponse::new(socks5::SOCKS5_AUTH_METHOD_PASSWORD);
                 response.write_to(&mut stream).await?;
-                let _request = match PasswdAuthRequest::read_from(&mut stream).await {
+                let request = match PasswdAuthRequest::read_from(&mut stream).await {
                     Ok(p) => p,
                     Err(err) => {
                         let response = PasswdAuthResponse::new(err.as_reply().as_u8());
-                        response.write_to(&mut stream).await?;
-
+                        let _ = response.write_to(&mut stream).await;
                         return Err(invalid_data_error(format!(
                             "Socks5 authentication request failed: {err}"
                         )));
                     }
                 };
-                todo!("socks5 auth");
+                const PASSWORD_AUTH_STATUS_FAILURE: u8 = 255;
+                let user_name = match String::from_utf8(request.uname) {
+                    Ok(u) => u,
+                    Err(..) => {
+                        let response = PasswdAuthResponse::new(PASSWORD_AUTH_STATUS_FAILURE);
+                        let _ = response.write_to(&mut stream).await;
+                        return Err(invalid_data_error(
+                            "Socks5 Username/Password Authentication Initial request uname contains invalid characters",
+                        ));
+                    }
+                };
+
+                let password = match String::from_utf8(request.passwd) {
+                    Ok(u) => u,
+                    Err(..) => {
+                        let response = PasswdAuthResponse::new(PASSWORD_AUTH_STATUS_FAILURE);
+                        let _ = response.write_to(&mut stream).await;
+                        return Err(invalid_data_error(
+                            "Socks5 Username/Password Authentication Initial request passwd contains invalid characters",
+                        ));
+                    }
+                };
+                if self.auth(&user_name, &password) {
+                    let response = PasswdAuthResponse::new(0);
+                    response.write_to(&mut stream).await?;
+                } else {
+                    let response = PasswdAuthResponse::new(PASSWORD_AUTH_STATUS_FAILURE);
+                    response.write_to(&mut stream).await?;
+                    return Err(invalid_data_error(format!(
+                        "Socks5 Username/Password Authentication failed, user: {user_name}, password: {password}"
+                    )));
+                }
             }
             method => {
                 let response = HandshakeResponse::new(socks5::SOCKS5_AUTH_METHOD_NOT_ACCEPTABLE);

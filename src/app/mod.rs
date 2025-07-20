@@ -233,7 +233,6 @@ pub(crate) async fn establish_tcp_tunnel<S>(
 where
     S: AsyncRead + AsyncWrite + Unpin + ?Sized,
 {
-    // TODO: connection pool
     // TODO: exponential retry connection
     let mut down_stream = connect_tcp_host(peer, address, context).await?;
     return copy_bidirectional(stream, &mut down_stream)

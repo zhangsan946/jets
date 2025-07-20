@@ -45,8 +45,8 @@ This project still has many features to be implemented. Welcome anyone intereste
 - Other
 	- ✅ Connection option, e.g. bind interface, tcp fast open, ...
 	- ✅ UDP Full Cone
-	- ❌ Connection retry logic
-	- ❌ socks & http authentication
+	- ✅ Connection retry logic
+	- ✅ socks & http authentication
 	- 🚧 tls config, e.g. server name, certificate, ...
 	- ❌ fakedns
 	- ❌ more protocols & configurations

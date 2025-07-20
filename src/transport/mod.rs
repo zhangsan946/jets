@@ -52,7 +52,33 @@ impl TransportSettings {
         server_addr: &SocketAddr,
         xtls: bool,
     ) -> Result<Box<dyn ProxyStream>> {
-        let stream = TcpStream::connect_with_opts(server_addr, &self.connect_opts).await?;
+        // Exponential backoff retry logic for TCP connection
+        let mut attempts = 0u32;
+        let stream = loop {
+            match tokio::time::timeout(
+                std::time::Duration::from_millis(300),
+                TcpStream::connect_with_opts(server_addr, &self.connect_opts),
+            )
+            .await
+            {
+                Ok(Ok(s)) => break s,
+                Ok(Err(e)) => {
+                    log::error!("Connect tcp attempt {} failed: {}", attempts, e);
+                }
+                Err(_) => {
+                    log::error!("Connect tcp attempt {} timeout", attempts);
+                }
+            }
+            attempts += 1;
+            if attempts > 3 {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::NotConnected,
+                    "Max attempts reached",
+                ));
+            }
+            let delay = std::time::Duration::from_millis(100 * (2u64.pow(attempts)));
+            tokio::time::sleep(delay).await;
+        };
         match self.security {
             SecurityOption::Tls => {
                 let stream = self.tls.connect(stream, xtls).await?;

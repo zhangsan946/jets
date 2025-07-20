@@ -7,6 +7,7 @@ use super::{
 use crate::app::establish_tcp_tunnel;
 use crate::app::Context;
 use crate::common::Address;
+use base64::Engine as _;
 use bytes::Bytes;
 use http_body_util::{combinators::BoxBody, BodyExt};
 use hyper::{
@@ -18,6 +19,14 @@ use hyper::{
 use hyper_util::rt::TokioIo;
 use log::{debug, error, trace};
 use std::{collections::HashMap, net::SocketAddr, str::FromStr};
+
+const BASIC_AUTH_BASE64_ENGINE: base64::engine::GeneralPurpose =
+    base64::engine::GeneralPurpose::new(
+        &base64::alphabet::STANDARD,
+        base64::engine::GeneralPurposeConfig::new()
+            .with_encode_padding(true)
+            .with_decode_padding_mode(base64::engine::DecodePaddingMode::Indifferent),
+    );
 
 pub(crate) struct HttpService {
     peer_addr: SocketAddr,
@@ -70,7 +79,18 @@ impl HttpService {
         };
 
         if !accounts.is_empty() {
-            todo!("http auth");
+            match req.headers().get("Proxy-Authorization") {
+                Some(val) => {
+                    if !auth(accounts, val.as_bytes()) {
+                        error!("HTTP authentication failed from {}", self.peer_addr);
+                        return make_error_407();
+                    }
+                }
+                None => {
+                    error!("Http authentication is enabled");
+                    return make_error_407();
+                }
+            }
         }
 
         if req.method() == Method::CONNECT {
@@ -161,6 +181,12 @@ fn empty_body() -> BoxBody<Bytes, hyper::Error> {
         .boxed()
 }
 
+fn full_body(body: Bytes) -> BoxBody<Bytes, hyper::Error> {
+    http_body_util::Full::new(body)
+        .map_err(|never| match never {})
+        .boxed()
+}
+
 fn make_bad_request() -> Result<Response<BoxBody<Bytes, hyper::Error>>, hyper::Error> {
     Ok(Response::builder()
         .status(StatusCode::BAD_REQUEST)
@@ -172,6 +198,14 @@ fn make_internal_server_error() -> Result<Response<BoxBody<Bytes, hyper::Error>>
     Ok(Response::builder()
         .status(StatusCode::INTERNAL_SERVER_ERROR)
         .body(empty_body())
+        .unwrap())
+}
+
+fn make_error_407() -> Result<Response<BoxBody<Bytes, hyper::Error>>, hyper::Error> {
+    Ok(Response::builder()
+        .status(StatusCode::PROXY_AUTHENTICATION_REQUIRED)
+        .header("Proxy-Authenticate", "Basic realm=\"Proxy\"")
+        .body(full_body("Proxy Authentication Required".into()))
         .unwrap())
 }
 
@@ -217,6 +251,25 @@ fn clear_hop_headers(headers: &mut HeaderMap<HeaderValue>) {
     for header in &HOP_BY_HOP_HEADERS {
         while headers.remove(*header).is_some() {}
     }
+}
+
+fn auth(accounts: &HashMap<String, String>, val: &[u8]) -> bool {
+    if let Ok(val) = std::str::from_utf8(val) {
+        if let Some(val) = val.strip_prefix("Basic ") {
+            if let Ok(val) = BASIC_AUTH_BASE64_ENGINE.decode(val) {
+                if let Ok(val) = String::from_utf8(val) {
+                    if let Some(i) = val.find(':') {
+                        let username = &val[..i];
+                        let password = &val[i + 1..];
+                        if let Some(pwd) = accounts.get(username) {
+                            return pwd == password;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    false
 }
 
 fn set_conn_keep_alive(version: Version, headers: &mut HeaderMap<HeaderValue>, keep_alive: bool) {
